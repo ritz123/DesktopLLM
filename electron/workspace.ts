@@ -50,6 +50,10 @@ export type WorkspaceCommandOptions = {
   timeoutMs?: number;
 };
 
+export function isIgnoredWorkspacePath(relativePath: string) {
+  return relativePath.split(/[\\/]/).some((component) => IGNORED_DIRECTORIES.has(component));
+}
+
 function isContained(base: string, target: string) {
   const pathFromBase = relative(base, target);
   return pathFromBase === ""

@@ -1,25 +1,36 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import CodingView from "./CodingView";
-import { ChatMessage, initialChatState, reduceChat } from "./lib/chat";
+import { ChatMessage, parseChatMessages, reduceChat } from "./lib/chat";
+import { clampPaneSize } from "./lib/panes";
 
 type Provider = "ollama" | "openrouter";
 type AppView = "chat" | "coding";
 type Conversation = { id: string; title: string; createdAt: string; workFolder?: string };
 type Model = { provider: Provider; id: string; label: string };
 const storageKey = "desktopllm-conversations";
+const messageStorageKey = "desktopllm-messages";
+const sidebarWidthKey = "desktopllm-chat-sidebar-width";
+const inspectorWidthKey = "desktopllm-chat-inspector-width";
 
 function loadConversations(): Conversation[] {
   try { return JSON.parse(localStorage.getItem(storageKey) || "[]"); } catch { return []; }
+}
+
+function loadPaneSize(key: string, fallback: number, minimum: number, maximum: number) {
+  const stored = Number(localStorage.getItem(key));
+  return Number.isFinite(stored) && stored > 0 ? clampPaneSize(stored, minimum, maximum) : fallback;
 }
 
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>("chat");
   const [conversations, setConversations] = useState<Conversation[]>(loadConversations);
   const [activeId, setActiveId] = useState<string>(() => loadConversations()[0]?.id || crypto.randomUUID());
-  const [state, dispatch] = useReducer(reduceChat, initialChatState);
+  const [state, dispatch] = useReducer(reduceChat, {
+    messages: parseChatMessages(localStorage.getItem(messageStorageKey)),
+  });
   const [prompt, setPrompt] = useState("");
   const [provider, setProvider] = useState<Provider>("ollama");
   const [models, setModels] = useState<Model[]>([]);
@@ -37,6 +48,8 @@ export default function App() {
   const [defaultWorkFolder, setDefaultWorkFolder] = useState<string | undefined>();
   const [codingWorkFolder, setCodingWorkFolder] = useState<string | undefined>();
   const [attachments, setAttachments] = useState<string[]>([]);
+  const [sidebarWidth, setSidebarWidth] = useState(() => loadPaneSize(sidebarWidthKey, 248, 180, 420));
+  const [inspectorWidth, setInspectorWidth] = useState(() => loadPaneSize(inspectorWidthKey, 276, 220, 460));
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const activeMessages = useMemo(() => state.messages.filter((message) => message.conversationId === activeId), [activeId, state.messages]);
@@ -87,11 +100,12 @@ export default function App() {
       if (chunk.id !== activeId) return;
       if (chunk.type === "delta" && chunk.delta) dispatch({ type: "appendDelta", conversationId: activeId, delta: chunk.delta });
       if (chunk.type === "done") { dispatch({ type: "completeAssistant", conversationId: activeId }); setStreaming(false); }
-      if (chunk.type === "error") { setNotice(chunk.error || "The response failed."); setStreaming(false); }
+      if (chunk.type === "error") { dispatch({ type: "failAssistant", conversationId: activeId }); setNotice(chunk.error || "The response failed."); setStreaming(false); }
     });
   }, [activeId]);
 
   useEffect(() => { localStorage.setItem(storageKey, JSON.stringify(conversations)); }, [conversations]);
+  useEffect(() => { localStorage.setItem(messageStorageKey, JSON.stringify(state.messages)); }, [state.messages]);
   useEffect(() => {
     if (stickToBottomRef.current) transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
   }, [activeId, latestMessage?.id, latestMessage?.content]);
@@ -104,6 +118,20 @@ export default function App() {
     const id = crypto.randomUUID();
     setConversations((items) => [{ id, title: "New conversation", createdAt: new Date().toISOString(), workFolder: defaultWorkFolder }, ...items]);
     setActiveId(id);
+  }
+
+  function deleteConversation(conversationId: string) {
+    const conversation = conversations.find((item) => item.id === conversationId);
+    if (!conversation || !window.confirm(`Delete "${conversation.title}"? This cannot be undone.`)) return;
+    const remaining = conversations.filter((item) => item.id !== conversationId);
+    if (conversationId === activeId && streaming) {
+      window.desktopLLM.stopChat(activeId);
+      setStreaming(false);
+    }
+    setConversations(remaining);
+    dispatch({ type: "removeConversation", conversationId });
+    if (conversationId === activeId) setActiveId(remaining[0]?.id || crypto.randomUUID());
+    setNotice("Conversation deleted.");
   }
 
   async function send(event: FormEvent) {
@@ -138,18 +166,52 @@ export default function App() {
     if (transcript) stickToBottomRef.current = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 64;
   }
 
+  function beginHorizontalResize(
+    event: ReactPointerEvent<HTMLDivElement>,
+    side: "left" | "right",
+    startSize: number,
+    minimum: number,
+    maximum: number,
+    setSize: (size: number) => void,
+    storageKey: string,
+  ) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const onMove = (move: PointerEvent) => {
+      const delta = move.clientX - startX;
+      const size = clampPaneSize(startSize + (side === "left" ? delta : -delta), minimum, maximum);
+      setSize(size);
+      localStorage.setItem(storageKey, String(size));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
   async function saveSettings() {
     await window.desktopLLM.saveSettings({ ollamaUrl, webAccess, ...(openRouterKey ? { openRouterKey } : {}) });
     setOpenRouterKey(""); setSettingsOpen(false); setNotice("Settings saved. Refresh the model source to reconnect.");
   }
 
-  return <main className={`app-shell ${inspectorOpen && activeView === "chat" ? "inspector-open" : ""} ${activeView === "coding" ? "coding-view" : ""}`}>
+  const shellStyle = {
+    "--chat-sidebar-width": `${sidebarWidth}px`,
+    "--inspector-width": `${inspectorWidth}px`,
+  } as CSSProperties;
+
+  return <main className={`app-shell ${inspectorOpen && activeView === "chat" ? "inspector-open" : ""} ${activeView === "coding" ? "coding-view" : ""}`} style={shellStyle}>
     <aside className="sidebar" aria-label="Navigation">
+      <div className="pane-resizer pane-resizer-right" role="separator" aria-label="Resize conversation sidebar" aria-orientation="vertical" onPointerDown={(event) => beginHorizontalResize(event, "left", sidebarWidth, 180, 420, setSidebarWidth, sidebarWidthKey)} />
       <div className="brand"><i /> <span>DesktopLLM</span></div>
       {activeView === "chat" && <>
       <button className="new-chat" onClick={newConversation}>＋ New chat</button>
       <p className="eyebrow">Conversations</p>
-      <nav className="conversation-list">{conversations.map((item) => <button key={item.id} className={`conversation ${item.id === activeId ? "active" : ""}`} onClick={() => setActiveId(item.id)}>{item.title}</button>)}</nav>
+      <nav className="conversation-list">{conversations.map((item) => <div className="conversation-row" key={item.id}>
+        <button className="delete-conversation" aria-label={`Delete ${item.title}`} title="Delete conversation" onClick={() => deleteConversation(item.id)}>×</button>
+        <button className={`conversation ${item.id === activeId ? "active" : ""}`} onClick={() => setActiveId(item.id)}>{item.title}</button>
+      </div>)}</nav>
       </>}
       <div className="sidebar-footer"><button className="settings-link" onClick={() => setSettingsOpen(true)}>Settings</button><button className="settings-link" onClick={() => setAboutOpen(true)}>About DesktopLLM</button></div>
     </aside>
@@ -161,7 +223,7 @@ export default function App() {
       {activeView === "chat" ? <section className="chat-pane">
       <header><div><strong>{conversations.find((item) => item.id === activeId)?.title || "New conversation"}</strong><span>{provider === "ollama" ? "Local model" : "OpenRouter"}</span></div><div className="header-actions"><button className="model-status" onClick={() => setProvider(provider === "ollama" ? "openrouter" : "ollama")}>{provider === "ollama" ? "● Ollama" : "● OpenRouter"}</button><button className="inspector-toggle" aria-label={inspectorOpen ? "Hide conversation controls" : "Show conversation controls"} aria-pressed={inspectorOpen} onClick={() => setInspectorOpen((open) => !open)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16M16 3v4M9 10v4M18 17v4" /></svg></button></div></header>
       <div className="notice" role="status">{notice}</div>
-      <div className="messages" ref={transcriptRef} onScroll={trackTranscriptScroll}>{activeMessages.length === 0 ? <div className="welcome"><h1>What would you like to work on?</h1><p>Select a work folder, then ask the assistant to read, edit, and run commands in that project. Your conversations remain on this device.</p></div> : activeMessages.map((message) => <article key={message.id} className={`message ${message.role}`}><span>{message.role === "user" ? "You" : "Assistant"}</span><div className="markdown">{message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{message.content}</ReactMarkdown> : message.status === "streaming" ? "Thinking…" : ""}</div>{message.content && <div className="message-actions"><button onClick={() => void navigator.clipboard.writeText(message.content)}>Copy</button><button onClick={() => exportMessage(message, "text")}>Raw text</button><button onClick={() => exportMessage(message, "pdf")}>PDF</button></div>}</article>)}</div>
+      <div className="messages" ref={transcriptRef} onScroll={trackTranscriptScroll}>{activeMessages.length === 0 ? <div className="welcome"><h1>What would you like to work on?</h1><p>Select a work folder, then ask the assistant to read, edit, and run commands in that project. Your conversations remain on this device.</p></div> : activeMessages.map((message) => <article key={message.id} className={`message ${message.role}`}><span>{message.role === "user" ? "You" : "Assistant"}</span><div className="markdown">{message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{message.content}</ReactMarkdown> : message.status === "streaming" ? "Thinking…" : ""}</div><div className={`message-status ${message.status || "complete"}`}>{message.role === "user" ? "Sent" : message.status === "streaming" ? "Thinking…" : message.status === "error" ? "Failed" : "Complete"}</div>{message.content && <div className="message-actions"><button onClick={() => void navigator.clipboard.writeText(message.content)}>Copy</button><button onClick={() => exportMessage(message, "text")}>Raw text</button><button onClick={() => exportMessage(message, "pdf")}>PDF</button></div>}</article>)}</div>
       <form className="composer" onSubmit={send}>
         <div className="work-folder" aria-label="Work folder">
           <button type="button" className="work-folder-button" onClick={() => void pickWorkFolder()}>
@@ -181,6 +243,7 @@ export default function App() {
     />}
     </section>
     {activeView === "chat" && inspectorOpen && <aside className="inspector" aria-label="Model controls">
+      <div className="pane-resizer pane-resizer-left" role="separator" aria-label="Resize conversation controls" aria-orientation="vertical" onPointerDown={(event) => beginHorizontalResize(event, "right", inspectorWidth, 220, 460, setInspectorWidth, inspectorWidthKey)} />
       <h2>Conversation</h2><label>Model source<select value={provider} onChange={(event) => setProvider(event.target.value as Provider)}><option value="ollama">Ollama (local)</option><option value="openrouter">OpenRouter</option></select></label>
       <label>Active model<select aria-label="Active model" value={model} onChange={(event) => setModel(event.target.value)}><option value="">Select a model</option>{models.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
       <label>System prompt<textarea value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} rows={5} /></label>

@@ -14,10 +14,28 @@ export interface ChatState {
   messages: ChatMessage[];
 }
 
+export function parseChatMessages(serialized: string | null): ChatMessage[] {
+  try {
+    const parsed: unknown = JSON.parse(serialized || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((message): message is ChatMessage => typeof message === "object"
+      && message !== null
+      && typeof (message as ChatMessage).id === "string"
+      && typeof (message as ChatMessage).conversationId === "string"
+      && typeof (message as ChatMessage).role === "string"
+      && typeof (message as ChatMessage).content === "string"
+      && typeof (message as ChatMessage).createdAt === "string");
+  } catch {
+    return [];
+  }
+}
+
 export type ChatAction =
   | { type: "appendDelta"; conversationId: string; delta: string }
   | { type: "completeAssistant"; conversationId: string }
+  | { type: "failAssistant"; conversationId: string }
   | { type: "addMessage"; message: ChatMessage }
+  | { type: "removeConversation"; conversationId: string }
   | { type: "replace"; messages: ChatMessage[] };
 
 export const initialChatState: ChatState = { messages: [] };
@@ -25,6 +43,9 @@ export const initialChatState: ChatState = { messages: [] };
 export function reduceChat(state: ChatState, action: ChatAction): ChatState {
   if (action.type === "replace") return { messages: action.messages };
   if (action.type === "addMessage") return { messages: [...state.messages, action.message] };
+  if (action.type === "removeConversation") {
+    return { messages: state.messages.filter((message) => message.conversationId !== action.conversationId) };
+  }
   if (action.type === "appendDelta") {
     const last = state.messages.at(-1);
     if (last?.role === "assistant" && last.conversationId === action.conversationId) {
@@ -39,6 +60,13 @@ export function reduceChat(state: ChatState, action: ChatAction): ChatState {
         createdAt: new Date().toISOString(),
         status: "streaming",
       }],
+    };
+  }
+  if (action.type === "failAssistant") {
+    return {
+      messages: state.messages.map((message) => message.conversationId === action.conversationId && message.role === "assistant"
+        ? { ...message, status: "error" }
+        : message),
     };
   }
   return { messages: state.messages.map((message) => message.conversationId === action.conversationId && message.role === "assistant" ? { ...message, status: "complete" } : message) };

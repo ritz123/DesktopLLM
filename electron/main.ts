@@ -1,11 +1,14 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
+import { watch, type FSWatcher } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { executeTool, isAllowedCommand, ToolCall, toolsForAgent } from "./tools.js";
+import { join, relative } from "node:path";
+import { executeTool, formatToolError, isAllowedCommand, normalizeToolCall, ToolCall, toolsForAgent } from "./tools.js";
 import { extractDocuments } from "./documents.js";
 import {
+  isIgnoredWorkspacePath,
   listWorkspaceTree,
   readWorkspaceFile,
+  resolveWorkspacePath,
   runWorkspaceCommand,
   writeWorkspaceFile,
   type WorkspaceCommand,
@@ -24,6 +27,7 @@ type Settings = {
 let windowRef: BrowserWindow | null = null;
 const controllers = new Map<string, AbortController>();
 const workspaceCommands = new Map<string, WorkspaceCommand>();
+const workspaceWatchers = new Map<number, FSWatcher>();
 const settingsPath = () => join(app.getPath("userData"), "settings.json");
 
 async function getSettings(): Promise<Settings> {
@@ -107,8 +111,17 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
     }
     history.push(payload.message);
     for (const call of calls) {
-      event.sender.send("chat:chunk", { id, type: "tool", name: call.function.name, status: "running" });
-      const result = await executeTool(call, workFolder, settings.webAccess ?? true);
+      const normalizedCall = normalizeToolCall(call);
+      event.sender.send("chat:chunk", { id, type: "tool", name: normalizedCall.function.name, status: "running" });
+      let result: { name: string; content: string };
+      try {
+        result = await executeTool(normalizedCall, workFolder, settings.webAccess ?? true);
+      } catch (error) {
+        result = {
+          name: normalizedCall.function.name,
+          content: formatToolError(normalizedCall.function.name, error),
+        };
+      }
       event.sender.send("chat:chunk", { id, type: "tool", name: result.name, status: "complete", content: result.content.slice(0, 300) });
       history.push({ role: "tool", tool_name: result.name, content: result.content });
     }
@@ -246,6 +259,27 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle("workspace:stop", (_event, id: string) => workspaceCommands.get(id)?.stop());
+  ipcMain.handle("workspace:watch", async (event, root: string) => {
+    const senderId = event.sender.id;
+    workspaceWatchers.get(senderId)?.close();
+    const workspaceRoot = await resolveWorkspacePath(root, ".");
+    const watcher = watch(workspaceRoot, { recursive: true }, (_eventType, filename) => {
+      if (!filename) return;
+      const path = relative(workspaceRoot, join(workspaceRoot, filename.toString())).replaceAll("\\", "/");
+      if (!path || path.startsWith("..") || isIgnoredWorkspacePath(path)) return;
+      event.sender.send("workspace:changed", { path });
+    });
+    workspaceWatchers.set(senderId, watcher);
+    event.sender.once("destroyed", () => {
+      workspaceWatchers.get(senderId)?.close();
+      workspaceWatchers.delete(senderId);
+    });
+  });
+  ipcMain.handle("workspace:unwatch", (event) => {
+    const senderId = event.sender.id;
+    workspaceWatchers.get(senderId)?.close();
+    workspaceWatchers.delete(senderId);
+  });
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });

@@ -1,8 +1,9 @@
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useReducer, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { ChatMessage, initialChatState, reduceChat } from "./lib/chat";
+import { ChatMessage, parseChatMessages, reduceChat } from "./lib/chat";
+import { clampPaneSize } from "./lib/panes";
 
 type WorkspaceEntry = {
   name: string;
@@ -27,6 +28,15 @@ type Props = {
   onProviderChange: (provider: "ollama" | "openrouter") => void;
   onModelChange: (model: string) => void;
 };
+
+const explorerWidthKey = "desktopllm-coding-explorer-width";
+const assistantWidthKey = "desktopllm-coding-assistant-width";
+const codingMessageStorageKey = "desktopllm-coding-messages";
+
+function loadPaneSize(key: string, fallback: number, minimum: number, maximum: number) {
+  const stored = Number(localStorage.getItem(key));
+  return Number.isFinite(stored) && stored > 0 ? clampPaneSize(stored, minimum, maximum) : fallback;
+}
 
 function flattenFiles(entries: WorkspaceEntry[]): WorkspaceEntry[] {
   return entries.flatMap((entry) => entry.type === "directory"
@@ -91,26 +101,34 @@ export default function CodingView({
   const [activePath, setActivePath] = useState("");
   const [notice, setNotice] = useState("");
   const [loadingTree, setLoadingTree] = useState(false);
-  const [chatState, dispatchChat] = useReducer(reduceChat, initialChatState);
+  const [chatState, dispatchChat] = useReducer(reduceChat, {
+    messages: parseChatMessages(localStorage.getItem(codingMessageStorageKey)),
+  });
   const [prompt, setPrompt] = useState("");
   const [streaming, setStreaming] = useState(false);
+  const [explorerWidth, setExplorerWidth] = useState(() => loadPaneSize(explorerWidthKey, 252, 180, 480));
+  const [assistantWidth, setAssistantWidth] = useState(() => loadPaneSize(assistantWidthKey, 420, 260, 900));
   const chatId = "coding-workspace";
   const chatMessages = useMemo(
     () => chatState.messages.filter((message) => message.conversationId === chatId),
     [chatState.messages],
   );
 
+  useEffect(() => {
+    localStorage.setItem(codingMessageStorageKey, JSON.stringify(chatState.messages));
+  }, [chatState.messages]);
+
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.path === activePath),
     [activePath, tabs],
   );
 
-  const refreshTree = useCallback(async (root: string) => {
+  const refreshTree = useCallback(async (root: string, quiet = false) => {
     setLoadingTree(true);
     try {
       const entries = await window.desktopLLM.workspaceList(root);
       setTree(entries);
-      setNotice(`Workspace loaded: ${root}`);
+      if (!quiet) setNotice(`Workspace loaded: ${root}`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Failed to load workspace tree.");
     } finally {
@@ -123,6 +141,33 @@ export default function CodingView({
     void refreshTree(workFolder);
   }, [refreshTree, workFolder]);
 
+  useEffect(() => {
+    if (!workFolder) return;
+    void window.desktopLLM.workspaceWatch(workFolder).catch((error: Error) => {
+      setNotice(error.message || "Could not watch workspace files.");
+    });
+    return () => { void window.desktopLLM.workspaceUnwatch(); };
+  }, [workFolder]);
+
+  useEffect(() => window.desktopLLM.onWorkspaceChange((change) => {
+    if (!workFolder) return;
+    void refreshTree(workFolder, true);
+    const tab = tabs.find((item) => item.path === change.path);
+    if (!tab) return;
+    if (tab.dirty) {
+      setNotice(`${change.path} changed on disk. Your unsaved editor changes were kept.`);
+      return;
+    }
+    void window.desktopLLM.workspaceRead(workFolder, change.path).then((content) => {
+      setTabs((items) => items.map((item) => item.path === change.path && !item.dirty
+        ? { ...item, content, dirty: false }
+        : item));
+      setNotice(`Reloaded ${change.path} after a disk change.`);
+    }).catch(() => {
+      setNotice(`${change.path} was removed or can no longer be opened.`);
+    });
+  }), [refreshTree, tabs, workFolder]);
+
   useEffect(() => window.desktopLLM.onChunk((chunk) => {
     if (chunk.id !== chatId) return;
     if (chunk.type === "delta" && chunk.delta) {
@@ -133,6 +178,7 @@ export default function CodingView({
       setStreaming(false);
     }
     if (chunk.type === "error") {
+      dispatchChat({ type: "failAssistant", conversationId: chatId });
       setNotice(chunk.error || "The coding assistant response failed.");
       setStreaming(false);
     }
@@ -213,12 +259,51 @@ export default function CodingView({
     });
   }
 
+  function sendOnEnter(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
   function handleKeyDown(event: KeyboardEvent) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       void saveActiveFile();
     }
   }
+
+  function beginResize(
+    event: ReactPointerEvent<HTMLDivElement>,
+    axis: "horizontal" | "vertical",
+    direction: 1 | -1,
+    startSize: number,
+    minimum: number,
+    maximum: number,
+    setSize: (size: number) => void,
+    storageKey: string,
+  ) {
+    event.preventDefault();
+    const startPosition = axis === "horizontal" ? event.clientX : event.clientY;
+    const onMove = (move: PointerEvent) => {
+      const currentPosition = axis === "horizontal" ? move.clientX : move.clientY;
+      const delta = currentPosition - startPosition;
+      const size = clampPaneSize(startSize + direction * delta, minimum, maximum);
+      setSize(size);
+      localStorage.setItem(storageKey, String(size));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
+
+  const workspaceStyle = {
+    "--coding-explorer-width": `${explorerWidth}px`,
+    "--coding-assistant-width": `${assistantWidth}px`,
+  } as CSSProperties;
 
   if (!workFolder) {
     return (
@@ -250,8 +335,9 @@ export default function CodingView({
         </div>
       </header>
       {notice && <div className="notice" role="status">{notice}</div>}
-      <div className="coding-workspace">
+      <div className="coding-workspace" style={workspaceStyle}>
         <aside className="file-explorer" aria-label="Project files">
+          <div className="pane-resizer pane-resizer-right" role="separator" aria-label="Resize file explorer" aria-orientation="vertical" onPointerDown={(event) => beginResize(event, "horizontal", 1, explorerWidth, 180, 480, setExplorerWidth, explorerWidthKey)} />
           <p className="eyebrow">Files</p>
           <div className="tree-root">
             {tree.length === 0 ? <p className="tree-empty">No files yet.</p> : tree.map((entry) => (
@@ -302,7 +388,9 @@ export default function CodingView({
           ) : (
             <div className="editor-empty">Choose a file to start editing.</div>
           )}
-          <section className="coding-assistant" aria-label="Coding assistant">
+        </section>
+        <section className="coding-assistant" aria-label="Coding assistant">
+            <div className="pane-resizer pane-resizer-left" role="separator" aria-label="Resize coding assistant" aria-orientation="vertical" onPointerDown={(event) => beginResize(event, "horizontal", -1, assistantWidth, 260, 900, setAssistantWidth, assistantWidthKey)} />
             <div className="coding-assistant-header">
               <span>Assistant</span>
               <div>
@@ -321,17 +409,17 @@ export default function CodingView({
                 <article key={message.id} className={`coding-message ${message.role}`}>
                   <span>{message.role === "user" ? "You" : "Assistant"}</span>
                   <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{message.content || "Thinking…"}</ReactMarkdown></div>
+                  <div className={`message-status ${message.status || "complete"}`}>{message.role === "user" ? "Sent" : message.status === "streaming" ? "Thinking…" : message.status === "error" ? "Failed" : "Complete"}</div>
                 </article>
               ))}
             </div>
             <form className="coding-composer" onSubmit={sendChat}>
-              <textarea aria-label="Coding assistant message" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Ask the coding assistant…" rows={2} />
+              <textarea aria-label="Coding assistant message" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={sendOnEnter} placeholder="Ask the coding assistant…" rows={2} />
               <button type={streaming ? "button" : "submit"} onClick={() => streaming && window.desktopLLM.stopChat(chatId)} disabled={!streaming && (!prompt.trim() || !model)}>
                 {streaming ? "Stop" : "Send ↑"}
               </button>
             </form>
           </section>
-        </section>
       </div>
     </section>
   );

@@ -17,9 +17,31 @@ export const agentTools = [
 const COMMAND_TIMEOUT_MS = 60_000;
 const MAX_COMMAND_OUTPUT = 24_000;
 
+export function normalizeToolCall(call: ToolCall): ToolCall {
+  const nameMatch = call.function.name.match(/^([a-z_]+)/i);
+  const name = nameMatch?.[1] || call.function.name;
+  const key = call.function.name.match(/<?arg_key>([^<]+)<\/arg_key>/i)?.[1];
+  const value = call.function.name.match(/<?arg_value>([^<]+)<\/arg_value>/i)?.[1];
+  return {
+    function: {
+      name,
+      arguments: key && value ? { ...call.function.arguments, [key]: value } : call.function.arguments,
+    },
+  };
+}
+
 export function isAllowedCommand(command: string) {
   const trimmed = command.trim();
   return trimmed.length > 0 && !/\b(sudo|pkexec|doas)\b/i.test(trimmed);
+}
+
+export function extractPublicUrl(value: string) {
+  return value.match(/https?:\/\/[^\s<>"']+/i)?.[0] || value.trim();
+}
+
+export function formatToolError(name: string, error: unknown) {
+  const detail = error instanceof Error ? error.message : "Unknown tool error.";
+  return `${name} failed: ${detail} Try another source or approach.`;
 }
 
 export function isSafePublicUrl(value: string) {
@@ -102,7 +124,7 @@ export async function executeTool(call: ToolCall, workFolder: string | undefined
     return { name, content: sanitizeText(await response.text()).slice(0, 12_000) };
   }
   if (name === "fetch_page") {
-    const url = String(args.url || "");
+    const url = extractPublicUrl(String(args.url || ""));
     if (!isSafePublicUrl(url)) throw new Error("Only public HTTP(S) URLs are allowed.");
     const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(12_000), headers: { "User-Agent": "DesktopLLM/0.1" } });
     if (!response.ok || !isSafePublicUrl(response.url)) throw new Error("Page fetch was rejected.");

@@ -34,6 +34,8 @@ interface Window {
     workspaceWrite(root: string, relativePath: string, content: string): Promise<void>;
     workspaceRun(args: { id: string; root: string; command: string }): Promise<void>;
     workspaceStop(id: string): Promise<void>;
+    workspaceWatch(root: string): Promise<void>;
+    workspaceUnwatch(): Promise<void>;
     onWorkspaceChunk(listener: (chunk: {
       id: string;
       type: "stdout" | "stderr" | "done" | "error";
@@ -42,5 +44,6 @@ interface Window {
       timedOut?: boolean;
       error?: string;
     }) => void): () => void;
+    onWorkspaceChange(listener: (change: { path: string }) => void): () => void;
   };
 }

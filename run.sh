@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 unset ELECTRON_RUN_AS_NODE
 
-app=./dist/linux-unpacked/desktopllm
+app=./release/linux-unpacked/desktopllm
 needs_package=false
 shopt -s globstar nullglob
 for source in package.json vite.config.ts index.html src/**/* electron/**/*; do
@@ -15,6 +15,7 @@ for source in package.json vite.config.ts index.html src/**/* electron/**/*; do
 done
 
 if [[ ! -x "$app" || "$needs_package" == true ]]; then
+  rm -rf ./release
   npm run package
 fi
 

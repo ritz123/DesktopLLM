@@ -40,8 +40,13 @@
     "appId": "com.desktopllm.app",
     "productName": "DesktopLLM",
     "icon": "build/icon.png",
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "dist/**",
+      "!dist/**/*.AppImage",
+      "!dist/linux-unpacked{,/**}",
       "dist-electron/**",
       "build/icon.png",
       "package.json"

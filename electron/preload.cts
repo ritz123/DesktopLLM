@@ -35,9 +35,16 @@ contextBridge.exposeInMainWorld("desktopLLM", {
   workspaceWrite: (root: string, relativePath: string, content: string) => ipcRenderer.invoke("workspace:write", root, relativePath, content),
   workspaceRun: (args: { id: string; root: string; command: string }) => ipcRenderer.invoke("workspace:run", args),
   workspaceStop: (id: string) => ipcRenderer.invoke("workspace:stop", id),
+  workspaceWatch: (root: string) => ipcRenderer.invoke("workspace:watch", root),
+  workspaceUnwatch: () => ipcRenderer.invoke("workspace:unwatch"),
   onWorkspaceChunk: (listener: (chunk: WorkspaceChunk) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, chunk: WorkspaceChunk) => listener(chunk);
     ipcRenderer.on("workspace:chunk", wrapped);
     return () => ipcRenderer.removeListener("workspace:chunk", wrapped);
+  },
+  onWorkspaceChange: (listener: (change: { path: string }) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, change: { path: string }) => listener(change);
+    ipcRenderer.on("workspace:changed", wrapped);
+    return () => ipcRenderer.removeListener("workspace:changed", wrapped);
   },
 });

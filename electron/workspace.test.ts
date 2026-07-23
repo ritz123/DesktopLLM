@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   isAllowedWorkspaceCommand,
+  isIgnoredWorkspacePath,
   listWorkspaceTree,
   readWorkspaceFile,
   runWorkspaceCommand,
@@ -45,6 +46,13 @@ async function waitForFile(path: string) {
 }
 
 describe("workspace filesystem boundary", () => {
+  it("ignores heavy workspace paths for file-change notifications", () => {
+    expect(isIgnoredWorkspacePath("node_modules/vite/index.js")).toBe(true);
+    expect(isIgnoredWorkspacePath(".git/HEAD")).toBe(true);
+    expect(isIgnoredWorkspacePath("dist/assets/app.js")).toBe(true);
+    expect(isIgnoredWorkspacePath("src/App.tsx")).toBe(false);
+  });
+
   it("rejects paths outside the workspace", async () => {
     const { parent, root } = await makeWorkspace();
     await writeFile(join(parent, "outside.txt"), "secret");
