@@ -56,6 +56,17 @@ describe("reduceChat", () => {
     expect(failed.messages[0]?.status).toBe("error");
   });
 
+  it("adds a streaming assistant placeholder while waiting for a response", () => {
+    const state = reduceChat(initialChatState, { type: "startAssistant", conversationId: "one" } as never);
+
+    expect(state.messages[0]).toMatchObject({
+      conversationId: "one",
+      role: "assistant",
+      content: "",
+      status: "streaming",
+    });
+  });
+
   it("appends a streamed delta to the active assistant message", () => {
     const state = reduceChat(initialChatState, {
       type: "appendDelta",

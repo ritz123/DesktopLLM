@@ -14,6 +14,7 @@ interface Window {
       workFolder?: string;
       codingWorkFolder?: string;
       webAccess: boolean;
+      theme: "dark" | "light";
     }>;
     saveSettings(settings: {
       ollamaUrl?: string;
@@ -21,6 +22,7 @@ interface Window {
       workFolder?: string;
       codingWorkFolder?: string;
       webAccess?: boolean;
+      theme?: "dark" | "light";
     }): Promise<void>;
     listModels(provider: "ollama" | "openrouter"): Promise<{ provider: "ollama" | "openrouter"; id: string; label: string }[]>;
     pickWorkFolder(): Promise<string | null>;

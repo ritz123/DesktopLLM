@@ -7,6 +7,7 @@ import { ChatMessage, parseChatMessages, reduceChat } from "./lib/chat";
 import { clampPaneSize } from "./lib/panes";
 
 type Provider = "ollama" | "openrouter";
+type Theme = "dark" | "light";
 type AppView = "chat" | "coding";
 type Conversation = { id: string; title: string; createdAt: string; workFolder?: string };
 type Model = { provider: Provider; id: string; label: string };
@@ -45,6 +46,7 @@ export default function App() {
   const [ollamaUrl, setOllamaUrl] = useState("http://127.0.0.1:11434");
   const [openRouterKey, setOpenRouterKey] = useState("");
   const [webAccess, setWebAccess] = useState(true);
+  const [theme, setTheme] = useState<Theme>("dark");
   const [defaultWorkFolder, setDefaultWorkFolder] = useState<string | undefined>();
   const [codingWorkFolder, setCodingWorkFolder] = useState<string | undefined>();
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -95,6 +97,7 @@ export default function App() {
       setDefaultWorkFolder(settings.workFolder);
       setCodingWorkFolder(settings.codingWorkFolder);
       setWebAccess(settings.webAccess);
+      setTheme(settings.theme);
     }).catch(() => setNotice("Desktop bridge unavailable. Launch via Electron."));
     return window.desktopLLM.onChunk((chunk) => {
       if (chunk.id !== activeId) return;
@@ -144,6 +147,7 @@ export default function App() {
     }
     const message: ChatMessage = { id: crypto.randomUUID(), conversationId: activeId, role: "user", content: prompt.trim(), createdAt: new Date().toISOString(), status: "complete" };
     dispatch({ type: "replace", messages: [...state.messages, message] });
+    dispatch({ type: "startAssistant", conversationId: activeId });
     setConversations((items) => items.some((item) => item.id === activeId) ? items.map((item) => item.id === activeId ? { ...item, title: item.title === "New conversation" ? message.content.slice(0, 42) : item.title } : item) : [{ id: activeId, title: message.content.slice(0, 42), createdAt: message.createdAt, workFolder: folder }, ...items]);
     setPrompt(""); setAttachments([]); setStreaming(true); setNotice(`Reading ${attachments.length ? `${attachments.length} attached document${attachments.length === 1 ? "" : "s"} and ` : ""}streaming from ${model}…`);
     await window.desktopLLM.sendChat({ id: activeId, provider, model, messages: [...activeMessages, message].map(({ role, content }) => ({ role, content })), systemPrompt, temperature, attachments, workFolder: folder });
@@ -192,7 +196,7 @@ export default function App() {
   }
 
   async function saveSettings() {
-    await window.desktopLLM.saveSettings({ ollamaUrl, webAccess, ...(openRouterKey ? { openRouterKey } : {}) });
+    await window.desktopLLM.saveSettings({ ollamaUrl, webAccess, theme, ...(openRouterKey ? { openRouterKey } : {}) });
     setOpenRouterKey(""); setSettingsOpen(false); setNotice("Settings saved. Refresh the model source to reconnect.");
   }
 
@@ -201,7 +205,7 @@ export default function App() {
     "--inspector-width": `${inspectorWidth}px`,
   } as CSSProperties;
 
-  return <main className={`app-shell ${inspectorOpen && activeView === "chat" ? "inspector-open" : ""} ${activeView === "coding" ? "coding-view" : ""}`} style={shellStyle}>
+  return <main className={`app-shell theme-${theme} ${inspectorOpen && activeView === "chat" ? "inspector-open" : ""} ${activeView === "coding" ? "coding-view" : ""}`} style={shellStyle}>
     <aside className="sidebar" aria-label="Navigation">
       <div className="pane-resizer pane-resizer-right" role="separator" aria-label="Resize conversation sidebar" aria-orientation="vertical" onPointerDown={(event) => beginHorizontalResize(event, "left", sidebarWidth, 180, 420, setSidebarWidth, sidebarWidthKey)} />
       <div className="brand"><i /> <span>DesktopLLM</span></div>
@@ -223,7 +227,7 @@ export default function App() {
       {activeView === "chat" ? <section className="chat-pane">
       <header><div><strong>{conversations.find((item) => item.id === activeId)?.title || "New conversation"}</strong><span>{provider === "ollama" ? "Local model" : "OpenRouter"}</span></div><div className="header-actions"><button className="model-status" onClick={() => setProvider(provider === "ollama" ? "openrouter" : "ollama")}>{provider === "ollama" ? "● Ollama" : "● OpenRouter"}</button><button className="inspector-toggle" aria-label={inspectorOpen ? "Hide conversation controls" : "Show conversation controls"} aria-pressed={inspectorOpen} onClick={() => setInspectorOpen((open) => !open)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16M16 3v4M9 10v4M18 17v4" /></svg></button></div></header>
       <div className="notice" role="status">{notice}</div>
-      <div className="messages" ref={transcriptRef} onScroll={trackTranscriptScroll}>{activeMessages.length === 0 ? <div className="welcome"><h1>What would you like to work on?</h1><p>Select a work folder, then ask the assistant to read, edit, and run commands in that project. Your conversations remain on this device.</p></div> : activeMessages.map((message) => <article key={message.id} className={`message ${message.role}`}><span>{message.role === "user" ? "You" : "Assistant"}</span><div className="markdown">{message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{message.content}</ReactMarkdown> : message.status === "streaming" ? "Thinking…" : ""}</div><div className={`message-status ${message.status || "complete"}`}>{message.role === "user" ? "Sent" : message.status === "streaming" ? "Thinking…" : message.status === "error" ? "Failed" : "Complete"}</div>{message.content && <div className="message-actions"><button onClick={() => void navigator.clipboard.writeText(message.content)}>Copy</button><button onClick={() => exportMessage(message, "text")}>Raw text</button><button onClick={() => exportMessage(message, "pdf")}>PDF</button></div>}</article>)}</div>
+      <div className="messages" ref={transcriptRef} onScroll={trackTranscriptScroll}>{activeMessages.length === 0 ? <div className="welcome"><h1>What would you like to work on?</h1><p>Select a work folder, then ask the assistant to read, edit, and run commands in that project. Your conversations remain on this device.</p></div> : activeMessages.map((message) => <article key={message.id} className={`message ${message.role}`}><div className="message-header"><span className="message-role">{message.role === "user" ? "You" : "Assistant"}</span><span className={`message-status ${message.status || "complete"}`}>{message.role === "user" ? "Sent" : message.status === "streaming" ? "Thinking…" : message.status === "error" ? "Failed" : "Complete"}</span></div><div className="markdown">{message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{message.content}</ReactMarkdown> : message.status === "streaming" ? "Thinking…" : ""}</div>{message.content && <div className="message-actions"><button onClick={() => void navigator.clipboard.writeText(message.content)}>Copy</button><button onClick={() => exportMessage(message, "text")}>Raw text</button><button onClick={() => exportMessage(message, "pdf")}>PDF</button></div>}</article>)}</div>
       <form className="composer" onSubmit={send}>
         <div className="work-folder" aria-label="Work folder">
           <button type="button" className="work-folder-button" onClick={() => void pickWorkFolder()}>
@@ -250,7 +254,7 @@ export default function App() {
       <label>Temperature <output>{temperature.toFixed(1)}</output><input aria-label="Temperature" type="range" min="0" max="1" step="0.1" value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label>
       <div className="privacy"><b>Privacy</b><p>Messages are stored locally. No telemetry is sent.</p></div>
     </aside>}
-    {settingsOpen && <div className="modal-backdrop"><form className="settings-dialog" onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}><h2>Settings</h2><label>Ollama URL<input value={ollamaUrl} onChange={(event) => setOllamaUrl(event.target.value)} /></label><label>OpenRouter API key<input type="password" value={openRouterKey} onChange={(event) => setOpenRouterKey(event.target.value)} placeholder="Stored with OS encryption" /></label><label><input type="checkbox" checked={webAccess} onChange={(event) => setWebAccess(event.target.checked)} /> Allow web tools</label><footer><button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button><button className="primary" type="submit">Save settings</button></footer></form></div>}
+    {settingsOpen && <div className="modal-backdrop"><form className="settings-dialog" onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}><h2>Settings</h2><label>Theme<select value={theme} onChange={(event) => setTheme(event.target.value as Theme)}><option value="dark">Dark</option><option value="light">Light</option></select></label><label>Ollama URL<input value={ollamaUrl} onChange={(event) => setOllamaUrl(event.target.value)} /></label><label>OpenRouter API key<input type="password" value={openRouterKey} onChange={(event) => setOpenRouterKey(event.target.value)} placeholder="Stored with OS encryption" /></label><label><input type="checkbox" checked={webAccess} onChange={(event) => setWebAccess(event.target.checked)} /> Allow web tools</label><footer><button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button><button className="primary" type="submit">Save settings</button></footer></form></div>}
     {aboutOpen && <div className="modal-backdrop"><section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title"><img src="../build/icon.png" alt="" /><p className="eyebrow">DesktopLLM</p><h2 id="about-title">Local-first AI workspace</h2><p>Version 0.1.0</p><p>Chat with Ollama models on this device or OpenRouter models online. Conversations stay local; OpenRouter keys use OS encryption.</p><p>Select a work folder in chat so compatible Ollama models can read, write, and run commands there.</p><p className="license">Licensed under GNU GPL v3.0</p><p className="copyright">© 2026 Biplab Sarkar</p><footer><button className="primary" onClick={() => setAboutOpen(false)}>Close</button></footer></section></div>}
   </main>;
 }

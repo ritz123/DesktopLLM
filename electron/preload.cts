@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("desktopLLM", {
     workFolder?: string;
     codingWorkFolder?: string;
     webAccess?: boolean;
+    theme?: "dark" | "light";
   }) => ipcRenderer.invoke("settings:save", settings),
   listModels: (provider: "ollama" | "openrouter") => ipcRenderer.invoke("models:list", provider),
   pickWorkFolder: () => ipcRenderer.invoke("folders:pick"),

@@ -246,6 +246,7 @@ export default function CodingView({
       status: "complete",
     };
     dispatchChat({ type: "addMessage", message });
+    dispatchChat({ type: "startAssistant", conversationId: chatId });
     setPrompt("");
     setStreaming(true);
     await window.desktopLLM.sendChat({
@@ -407,9 +408,9 @@ export default function CodingView({
             <div className="coding-messages">
               {chatMessages.length === 0 ? <p>Ask about the project or an open file.</p> : chatMessages.map((message) => (
                 <article key={message.id} className={`coding-message ${message.role}`}>
-                  <span>{message.role === "user" ? "You" : "Assistant"}</span>
+                  <div className="message-header"><span className="message-role">{message.role === "user" ? "You" : "Assistant"}</span>
+                  <span className={`message-status ${message.status || "complete"}`}>{message.role === "user" ? "Sent" : message.status === "streaming" ? "Thinking…" : message.status === "error" ? "Failed" : "Complete"}</span></div>
                   <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{message.content || "Thinking…"}</ReactMarkdown></div>
-                  <div className={`message-status ${message.status || "complete"}`}>{message.role === "user" ? "Sent" : message.status === "streaming" ? "Thinking…" : message.status === "error" ? "Failed" : "Complete"}</div>
                 </article>
               ))}
             </div>

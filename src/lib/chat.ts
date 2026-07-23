@@ -32,6 +32,7 @@ export function parseChatMessages(serialized: string | null): ChatMessage[] {
 
 export type ChatAction =
   | { type: "appendDelta"; conversationId: string; delta: string }
+  | { type: "startAssistant"; conversationId: string }
   | { type: "completeAssistant"; conversationId: string }
   | { type: "failAssistant"; conversationId: string }
   | { type: "addMessage"; message: ChatMessage }
@@ -45,6 +46,18 @@ export function reduceChat(state: ChatState, action: ChatAction): ChatState {
   if (action.type === "addMessage") return { messages: [...state.messages, action.message] };
   if (action.type === "removeConversation") {
     return { messages: state.messages.filter((message) => message.conversationId !== action.conversationId) };
+  }
+  if (action.type === "startAssistant") {
+    return {
+      messages: [...state.messages, {
+        id: crypto.randomUUID(),
+        conversationId: action.conversationId,
+        role: "assistant",
+        content: "",
+        createdAt: new Date().toISOString(),
+        status: "streaming",
+      }],
+    };
   }
   if (action.type === "appendDelta") {
     const last = state.messages.at(-1);

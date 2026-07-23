@@ -15,6 +15,7 @@ import {
 } from "./workspace.js";
 
 type Provider = "ollama" | "openrouter";
+type Theme = "dark" | "light";
 type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 type Settings = {
   ollamaUrl: string;
@@ -22,6 +23,7 @@ type Settings = {
   workFolder?: string;
   codingWorkFolder?: string;
   webAccess?: boolean;
+  theme?: Theme;
 };
 
 let windowRef: BrowserWindow | null = null;
@@ -38,10 +40,11 @@ async function getSettings(): Promise<Settings> {
       workFolder: stored.workFolder || stored.allowedFolders?.[0],
       codingWorkFolder: stored.codingWorkFolder,
       webAccess: stored.webAccess ?? true,
+      theme: stored.theme === "light" ? "light" : "dark",
       openRouterKey: stored.openRouterKey && safeStorage.isEncryptionAvailable()
         ? safeStorage.decryptString(Buffer.from(stored.openRouterKey, "base64")) : undefined,
     };
-  } catch { return { ollamaUrl: "http://127.0.0.1:11434", webAccess: true }; }
+  } catch { return { ollamaUrl: "http://127.0.0.1:11434", webAccess: true, theme: "dark" }; }
 }
 
 async function saveSettings(patch: Partial<Settings>) {
@@ -55,6 +58,7 @@ async function saveSettings(patch: Partial<Settings>) {
     workFolder: patch.workFolder ?? old.workFolder,
     codingWorkFolder: patch.codingWorkFolder ?? old.codingWorkFolder,
     webAccess: patch.webAccess ?? old.webAccess,
+    theme: patch.theme ?? old.theme,
   }), "utf8");
 }
 
@@ -84,6 +88,23 @@ async function exportChat(format: "text" | "pdf", title: string, messages: ChatM
   printer.close();
 }
 
+async function requestFinalOllamaAnswer(url: string, model: string, history: unknown[], temperature: number) {
+  history.push({
+    role: "system",
+    content: "Tool use is no longer available. Answer the user now using the attached document text and any tool results already provided. Do not request more tools.",
+  });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages: history, stream: false, options: { temperature } }),
+  });
+  if (!response.ok) throw new Error(providerError("ollama", response.status));
+  const payload = await response.json() as { message: { content?: string } };
+  const content = payload.message.content?.trim();
+  if (!content) throw new Error("The model returned an empty response.");
+  return content;
+}
+
 async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, settings: Settings, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number, workFolder?: string) {
   const url = `${settings.ollamaUrl.replace(/\/$/, "")}/api/chat`;
   const toolPolicy = [
@@ -105,7 +126,8 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
     const payload = await response.json() as { message: { content?: string; tool_calls?: ToolCall[] } };
     const calls = payload.message.tool_calls || [];
     if (!calls.length) {
-      if (payload.message.content) event.sender.send("chat:chunk", { id, type: "delta", delta: payload.message.content });
+      const content = payload.message.content?.trim() || await requestFinalOllamaAnswer(url, model, history, temperature);
+      event.sender.send("chat:chunk", { id, type: "delta", delta: content });
       event.sender.send("chat:chunk", { id, type: "done" });
       return;
     }
@@ -126,7 +148,8 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
       history.push({ role: "tool", tool_name: result.name, content: result.content });
     }
   }
-  throw new Error("Tool-call limit reached.");
+  event.sender.send("chat:chunk", { id, type: "delta", delta: await requestFinalOllamaAnswer(url, model, history, temperature) });
+  event.sender.send("chat:chunk", { id, type: "done" });
 }
 
 async function listModels(provider: Provider) {
