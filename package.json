@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "A local-first Linux desktop chat client for Ollama and OpenRouter.",
   "author": "DesktopLLM contributors",
+  "license": "GPL-3.0-only",
   "desktopName": "desktopllm",
   "private": true,
   "type": "module",
@@ -38,6 +39,7 @@
     "files": [
       "dist/**",
       "dist-electron/**",
+      "build/icon.png",
       "package.json"
     ],
     "linux": {

@@ -138,7 +138,7 @@ async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provid
 }
 
 function createWindow() {
-  windowRef = new BrowserWindow({ width: 1320, height: 860, minWidth: 980, minHeight: 640, backgroundColor: "#1e1c19", webPreferences: { preload: join(import.meta.dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
+  windowRef = new BrowserWindow({ width: 1320, height: 860, minWidth: 980, minHeight: 640, icon: join(app.getAppPath(), "build", "icon.png"), backgroundColor: "#1e1c19", webPreferences: { preload: join(import.meta.dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
   windowRef.loadFile(join(app.getAppPath(), "dist", "index.html"));
 }
 

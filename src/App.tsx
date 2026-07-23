@@ -23,6 +23,7 @@ export default function App() {
   const [systemPrompt, setSystemPrompt] = useState("You are a helpful assistant.");
   const [temperature, setTemperature] = useState(0.7);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [ollamaUrl, setOllamaUrl] = useState("http://127.0.0.1:11434");
   const [openRouterKey, setOpenRouterKey] = useState("");
@@ -81,7 +82,7 @@ export default function App() {
       <button className="new-chat" onClick={newConversation}>＋ New chat</button>
       <p className="eyebrow">Conversations</p>
       <nav>{conversations.map((item) => <button key={item.id} className={`conversation ${item.id === activeId ? "active" : ""}`} onClick={() => setActiveId(item.id)}>{item.title}</button>)}</nav>
-      <button className="settings-link" onClick={() => setSettingsOpen(true)}>Settings</button>
+      <div className="sidebar-footer"><button className="settings-link" onClick={() => setSettingsOpen(true)}>Settings</button><button className="settings-link" onClick={() => setAboutOpen(true)}>About DesktopLLM</button></div>
     </aside>
     <section className="chat-pane">
       <header><div><strong>{conversations.find((item) => item.id === activeId)?.title || "New conversation"}</strong><span>{provider === "ollama" ? "Local model" : "OpenRouter"}</span></div><div className="header-actions"><button className="model-status" onClick={() => setProvider(provider === "ollama" ? "openrouter" : "ollama")}>{provider === "ollama" ? "● Ollama" : "● OpenRouter"}</button><button className="inspector-toggle" aria-label={inspectorOpen ? "Hide conversation controls" : "Show conversation controls"} aria-pressed={inspectorOpen} onClick={() => setInspectorOpen((open) => !open)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16M16 3v4M9 10v4M18 17v4" /></svg></button></div></header>
@@ -97,5 +98,6 @@ export default function App() {
       <div className="privacy"><b>Privacy</b><p>Messages are stored locally. No telemetry is sent.</p></div>
     </aside>}
     {settingsOpen && <div className="modal-backdrop"><form className="settings-dialog" onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}><h2>Settings</h2><label>Ollama URL<input value={ollamaUrl} onChange={(event) => setOllamaUrl(event.target.value)} /></label><label>OpenRouter API key<input type="password" value={openRouterKey} onChange={(event) => setOpenRouterKey(event.target.value)} placeholder="Stored with OS encryption" /></label><label><input type="checkbox" checked={webAccess} onChange={(event) => setWebAccess(event.target.checked)} /> Allow web tools</label><section><b>Allowed folders</b>{allowedFolders.map((folder) => <p key={folder}>{folder}</p>)}<button type="button" onClick={() => void window.desktopLLM.pickFolders().then((folders) => setAllowedFolders((current) => [...new Set([...current, ...folders])]))}>Add folders</button></section><footer><button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button><button className="primary" type="submit">Save settings</button></footer></form></div>}
+    {aboutOpen && <div className="modal-backdrop"><section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title"><img src="../build/icon.png" alt="" /><p className="eyebrow">DesktopLLM</p><h2 id="about-title">Local-first AI workspace</h2><p>Version 0.1.0</p><p>Chat with Ollama models on this device or OpenRouter models online. Conversations stay local; OpenRouter keys use OS encryption.</p><p>Compatible Ollama models can use web, selected-folder, and document tools.</p><p className="license">Licensed under GNU GPL v3.0</p><p className="copyright">© 2026 Biplab Sarkar</p><footer><button className="primary" onClick={() => setAboutOpen(false)}>Close</button></footer></section></div>}
   </main>;
 }
