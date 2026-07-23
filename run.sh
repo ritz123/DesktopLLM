@@ -5,7 +5,16 @@ cd "$(dirname "$0")"
 unset ELECTRON_RUN_AS_NODE
 
 app=./dist/linux-unpacked/desktopllm
-if [[ ! -x "$app" || electron/main.ts -nt "$app" || electron/preload.cts -nt "$app" || electron/tools.ts -nt "$app" || src/App.tsx -nt "$app" || vite.config.ts -nt "$app" || package.json -nt "$app" ]]; then
+needs_package=false
+shopt -s globstar nullglob
+for source in package.json vite.config.ts index.html src/**/* electron/**/*; do
+  if [[ "$source" -nt "$app" ]]; then
+    needs_package=true
+    break
+  fi
+done
+
+if [[ ! -x "$app" || "$needs_package" == true ]]; then
   npm run package
 fi
 

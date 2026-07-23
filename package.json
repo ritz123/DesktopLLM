@@ -26,12 +26,15 @@
     "vitest": "^3.0.8"
   },
   "dependencies": {
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "build": {
     "appId": "com.desktopllm.app",
     "productName": "DesktopLLM",
+    "icon": "build/icon.png",
     "files": [
       "dist/**",
       "dist-electron/**",

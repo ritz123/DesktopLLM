@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("desktopLLM", {
   saveSettings: (settings: { ollamaUrl?: string; openRouterKey?: string }) => ipcRenderer.invoke("settings:save", settings),
   listModels: (provider: "ollama" | "openrouter") => ipcRenderer.invoke("models:list", provider),
   pickFolders: () => ipcRenderer.invoke("folders:pick"),
+  pickDocuments: () => ipcRenderer.invoke("documents:pick"),
   sendChat: (args: unknown) => ipcRenderer.invoke("chat:send", args),
   stopChat: (id: string) => ipcRenderer.invoke("chat:stop", id),
   onChunk: (listener: (chunk: ChatChunk) => void) => {

@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { agentTools, executeTool, ToolCall } from "./tools.js";
+import { extractDocuments } from "./documents.js";
 
 type Provider = "ollama" | "openrouter";
 type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
@@ -95,14 +96,18 @@ async function listModels(provider: Provider) {
   } catch { throw new Error(providerError(provider)); }
 }
 
-async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provider: Provider, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number) {
+async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provider: Provider, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number, attachments: string[] = []) {
   const settings = await getSettings();
   const controller = new AbortController();
   controllers.set(id, controller);
-  const allMessages = systemPrompt.trim() ? [{ role: "system" as const, content: systemPrompt }, ...messages] : messages;
+  const attachmentContext = attachments.length ? await extractDocuments(attachments) : "";
+  const enrichedMessages = attachmentContext && messages.length
+    ? [...messages.slice(0, -1), { ...messages.at(-1)!, content: `${messages.at(-1)!.content}\n\n${attachmentContext}` }]
+    : messages;
+  const allMessages = systemPrompt.trim() ? [{ role: "system" as const, content: systemPrompt }, ...enrichedMessages] : enrichedMessages;
   try {
     if (provider === "ollama") {
-      await runOllamaAgent(event, id, settings, model, messages, systemPrompt, temperature);
+      await runOllamaAgent(event, id, settings, model, enrichedMessages, systemPrompt, temperature);
       return;
     }
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.openRouterKey}` }, body: JSON.stringify({ model, messages: allMessages, stream: true, temperature }) });
@@ -145,7 +150,14 @@ app.whenReady().then(() => {
     const result = await dialog.showOpenDialog({ properties: ["openDirectory", "multiSelections", "createDirectory"] });
     return result.canceled ? [] : result.filePaths;
   });
-  ipcMain.handle("chat:send", (event, args) => streamChat(event, args.id, args.provider, args.model, args.messages, args.systemPrompt, args.temperature));
+  ipcMain.handle("documents:pick", async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ["openFile", "multiSelections"],
+      filters: [{ name: "Documents", extensions: ["pdf", "docx", "md", "markdown", "txt"] }],
+    });
+    return result.canceled ? [] : result.filePaths;
+  });
+  ipcMain.handle("chat:send", (event, args) => streamChat(event, args.id, args.provider, args.model, args.messages, args.systemPrompt, args.temperature, args.attachments));
   ipcMain.handle("chat:stop", (_event, id: string) => controllers.get(id)?.abort());
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
