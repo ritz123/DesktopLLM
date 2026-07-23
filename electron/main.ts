@@ -1,27 +1,43 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { agentTools, executeTool, ToolCall } from "./tools.js";
+import { executeTool, isAllowedCommand, ToolCall, toolsForAgent } from "./tools.js";
 import { extractDocuments } from "./documents.js";
+import {
+  listWorkspaceTree,
+  readWorkspaceFile,
+  runWorkspaceCommand,
+  writeWorkspaceFile,
+  type WorkspaceCommand,
+} from "./workspace.js";
 
 type Provider = "ollama" | "openrouter";
 type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
-type Settings = { ollamaUrl: string; openRouterKey?: string; allowedFolders?: string[]; webAccess?: boolean };
+type Settings = {
+  ollamaUrl: string;
+  openRouterKey?: string;
+  workFolder?: string;
+  codingWorkFolder?: string;
+  webAccess?: boolean;
+};
 
 let windowRef: BrowserWindow | null = null;
 const controllers = new Map<string, AbortController>();
+const workspaceCommands = new Map<string, WorkspaceCommand>();
 const settingsPath = () => join(app.getPath("userData"), "settings.json");
 
 async function getSettings(): Promise<Settings> {
   try {
-    const stored = JSON.parse(await readFile(settingsPath(), "utf8")) as Settings;
+    const stored = JSON.parse(await readFile(settingsPath(), "utf8")) as Settings & { allowedFolders?: string[] };
     return {
       ollamaUrl: stored.ollamaUrl || "http://127.0.0.1:11434",
-      allowedFolders: stored.allowedFolders || [], webAccess: stored.webAccess ?? true,
+      workFolder: stored.workFolder || stored.allowedFolders?.[0],
+      codingWorkFolder: stored.codingWorkFolder,
+      webAccess: stored.webAccess ?? true,
       openRouterKey: stored.openRouterKey && safeStorage.isEncryptionAvailable()
         ? safeStorage.decryptString(Buffer.from(stored.openRouterKey, "base64")) : undefined,
     };
-  } catch { return { ollamaUrl: "http://127.0.0.1:11434", allowedFolders: [], webAccess: true }; }
+  } catch { return { ollamaUrl: "http://127.0.0.1:11434", webAccess: true }; }
 }
 
 async function saveSettings(patch: Partial<Settings>) {
@@ -29,7 +45,13 @@ async function saveSettings(patch: Partial<Settings>) {
   const key = patch.openRouterKey ?? old.openRouterKey;
   const encrypted = key && safeStorage.isEncryptionAvailable()
     ? safeStorage.encryptString(key).toString("base64") : undefined;
-  await writeFile(settingsPath(), JSON.stringify({ ollamaUrl: patch.ollamaUrl || old.ollamaUrl, openRouterKey: encrypted, allowedFolders: patch.allowedFolders ?? old.allowedFolders, webAccess: patch.webAccess ?? old.webAccess }), "utf8");
+  await writeFile(settingsPath(), JSON.stringify({
+    ollamaUrl: patch.ollamaUrl || old.ollamaUrl,
+    openRouterKey: encrypted,
+    workFolder: patch.workFolder ?? old.workFolder,
+    codingWorkFolder: patch.codingWorkFolder ?? old.codingWorkFolder,
+    webAccess: patch.webAccess ?? old.webAccess,
+  }), "utf8");
 }
 
 function providerError(provider: Provider, status?: number) {
@@ -38,18 +60,43 @@ function providerError(provider: Provider, status?: number) {
   return "OpenRouter is unavailable. Check your network connection and API key.";
 }
 
-async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, settings: Settings, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number) {
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]!));
+}
+
+async function exportChat(format: "text" | "pdf", title: string, messages: ChatMessage[]) {
+  const extension = format === "pdf" ? "pdf" : "txt";
+  const result = await dialog.showSaveDialog({ defaultPath: `${title || "DesktopLLM-chat"}.${extension}`, filters: [{ name: format === "pdf" ? "PDF" : "Text", extensions: [extension] }] });
+  if (result.canceled || !result.filePath) return;
+  const transcript = messages.map((message) => `${message.role === "assistant" ? "Assistant" : message.role === "user" ? "You" : "System"}:\n${message.content}`).join("\n\n");
+  if (format === "text") {
+    await writeFile(result.filePath, transcript, "utf8");
+    return;
+  }
+  const printer = new BrowserWindow({ show: false, webPreferences: { sandbox: true } });
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>body{font:14px system-ui;color:#222;margin:48px;line-height:1.55}h1{font-size:24px}article{margin:0 0 24px;break-inside:avoid}h2{font-size:12px;text-transform:uppercase;color:#85513e;margin:0 0 8px}pre{white-space:pre-wrap;font:13px ui-monospace,monospace;background:#f4f1ed;padding:12px;border-radius:6px}</style></head><body><h1>${escapeHtml(title || "DesktopLLM chat")}</h1>${messages.map((message) => `<article><h2>${message.role}</h2><pre>${escapeHtml(message.content)}</pre></article>`).join("")}</body></html>`;
+  await printer.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  await writeFile(result.filePath, await printer.webContents.printToPDF({ printBackground: true }));
+  printer.close();
+}
+
+async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, settings: Settings, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number, workFolder?: string) {
   const url = `${settings.ollamaUrl.replace(/\/$/, "")}/api/chat`;
   const toolPolicy = [
     "You are an agent with native tools.",
+    workFolder
+      ? `The user's work folder is ${workFolder}. Read, write, and run commands only inside that folder.`
+      : "No work folder is selected yet; ask the user to choose one before using local file or command tools.",
     "When a user needs current internet information, immediately call web_search with a useful query; do not ask for permission or merely describe the tool.",
     "Use fetch_page only after search when page details are needed.",
+    "Use run_command for builds, tests, and other shell tasks. Commands run as the current user without sudo.",
     "Use local file tools only for the user's requested work. Never claim a tool result you did not receive.",
     "After a tool result, answer the user directly and cite relevant URLs or file paths.",
   ].join(" ");
   let history: unknown[] = [{ role: "system", content: `${systemPrompt.trim()}\n\n${toolPolicy}`.trim() }, ...messages];
+  const tools = toolsForAgent(settings.webAccess ?? true);
   for (let step = 0; step < 4; step++) {
-    const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model, messages: history, stream: false, tools: agentTools, options: { temperature } }) });
+    const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model, messages: history, stream: false, tools, options: { temperature } }) });
     if (!response.ok) throw new Error(providerError("ollama", response.status));
     const payload = await response.json() as { message: { content?: string; tool_calls?: ToolCall[] } };
     const calls = payload.message.tool_calls || [];
@@ -61,7 +108,7 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
     history.push(payload.message);
     for (const call of calls) {
       event.sender.send("chat:chunk", { id, type: "tool", name: call.function.name, status: "running" });
-      const result = await executeTool(call, settings.allowedFolders || []);
+      const result = await executeTool(call, workFolder, settings.webAccess ?? true);
       event.sender.send("chat:chunk", { id, type: "tool", name: result.name, status: "complete", content: result.content.slice(0, 300) });
       history.push({ role: "tool", tool_name: result.name, content: result.content });
     }
@@ -96,7 +143,7 @@ async function listModels(provider: Provider) {
   } catch { throw new Error(providerError(provider)); }
 }
 
-async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provider: Provider, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number, attachments: string[] = []) {
+async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provider: Provider, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number, attachments: string[] = [], workFolder?: string) {
   const settings = await getSettings();
   const controller = new AbortController();
   controllers.set(id, controller);
@@ -107,7 +154,7 @@ async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provid
   const allMessages = systemPrompt.trim() ? [{ role: "system" as const, content: systemPrompt }, ...enrichedMessages] : enrichedMessages;
   try {
     if (provider === "ollama") {
-      await runOllamaAgent(event, id, settings, model, enrichedMessages, systemPrompt, temperature);
+      await runOllamaAgent(event, id, settings, model, enrichedMessages, systemPrompt, temperature, workFolder);
       return;
     }
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.openRouterKey}` }, body: JSON.stringify({ model, messages: allMessages, stream: true, temperature }) });
@@ -147,8 +194,8 @@ app.whenReady().then(() => {
   ipcMain.handle("settings:save", (_event, patch: Partial<Settings>) => saveSettings(patch));
   ipcMain.handle("models:list", (_event, provider: Provider) => listModels(provider));
   ipcMain.handle("folders:pick", async () => {
-    const result = await dialog.showOpenDialog({ properties: ["openDirectory", "multiSelections", "createDirectory"] });
-    return result.canceled ? [] : result.filePaths;
+    const result = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });
+    return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
   });
   ipcMain.handle("documents:pick", async () => {
     const result = await dialog.showOpenDialog({
@@ -157,8 +204,48 @@ app.whenReady().then(() => {
     });
     return result.canceled ? [] : result.filePaths;
   });
-  ipcMain.handle("chat:send", (event, args) => streamChat(event, args.id, args.provider, args.model, args.messages, args.systemPrompt, args.temperature, args.attachments));
+  ipcMain.handle("chat:export", (_event, args: { format: "text" | "pdf"; title: string; messages: ChatMessage[] }) => exportChat(args.format, args.title, args.messages));
+  ipcMain.handle("chat:send", (event, args: {
+    id: string;
+    provider: Provider;
+    model: string;
+    messages: ChatMessage[];
+    systemPrompt: string;
+    temperature: number;
+    attachments?: string[];
+    workFolder?: string;
+  }) => streamChat(event, args.id, args.provider, args.model, args.messages, args.systemPrompt, args.temperature, args.attachments, args.workFolder));
   ipcMain.handle("chat:stop", (_event, id: string) => controllers.get(id)?.abort());
+  ipcMain.handle("workspace:list", (_event, root: string) => listWorkspaceTree(root));
+  ipcMain.handle("workspace:read", (_event, root: string, relativePath: string) => readWorkspaceFile(root, relativePath));
+  ipcMain.handle("workspace:write", (_event, root: string, relativePath: string, content: string) => writeWorkspaceFile(root, relativePath, content));
+  ipcMain.handle("workspace:run", async (event, args: { id: string; root: string; command: string }) => {
+    if (!isAllowedCommand(args.command)) {
+      throw new Error("Privileged commands like sudo are not allowed.");
+    }
+    const command = await runWorkspaceCommand(args.root, args.command, (stream, data) => {
+      event.sender.send("workspace:chunk", { id: args.id, type: stream, data });
+    });
+    workspaceCommands.set(args.id, command);
+    try {
+      const result = await command.completion;
+      event.sender.send("workspace:chunk", {
+        id: args.id,
+        type: "done",
+        code: result.code,
+        timedOut: result.timedOut,
+      });
+    } catch (error) {
+      event.sender.send("workspace:chunk", {
+        id: args.id,
+        type: "error",
+        error: error instanceof Error ? error.message : "Command failed",
+      });
+    } finally {
+      workspaceCommands.delete(args.id);
+    }
+  });
+  ipcMain.handle("workspace:stop", (_event, id: string) => workspaceCommands.get(id)?.stop());
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });

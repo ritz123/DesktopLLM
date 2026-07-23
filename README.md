@@ -9,7 +9,7 @@ DesktopLLM is a Linux desktop chat client for locally hosted Ollama models and O
 - Store the OpenRouter API key using Electron OS encryption.
 - Stream model responses and stop generation.
 - Use tool-capable Ollama models for public-web search/page retrieval and selected-folder operations.
-- Select local folders for model-assisted listing, reading, and file creation/overwrite.
+- Select a work folder in chat for model-assisted listing, reading, writing, and command execution.
 - Attach PDF, DOCX, Markdown, and plain-text documents; text is extracted locally before being sent to the selected model.
 - Use a responsive three-pane workspace with a collapsible conversation inspector.
 
@@ -65,7 +65,7 @@ npm run build
 Only Ollama models that advertise the native `tools` capability through `/api/show` are shown for agent use. Tool operations run in Electron's main process:
 
 - `web_search` and `fetch_page` access public HTTP(S) endpoints.
-- `list_directory`, `read_file`, and `write_file` are restricted to folders selected in Settings.
+- `list_directory`, `read_file`, `write_file`, and `run_command` are restricted to the work folder selected in chat.
 
 Tool results and document text are sent to the model you selected. Do not add sensitive folders or documents unless you intend to share their relevant content with that model, especially when using an online OpenRouter model.
 
