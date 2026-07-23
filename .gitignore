@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-electron/
 .superpowers/
+.worktrees/
 *.AppImage
 *.tsbuildinfo
 .vscode/
