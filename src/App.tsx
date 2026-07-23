@@ -146,10 +146,6 @@ export default function App() {
   return <main className={`app-shell ${inspectorOpen && activeView === "chat" ? "inspector-open" : ""} ${activeView === "coding" ? "coding-view" : ""}`}>
     <aside className="sidebar" aria-label="Navigation">
       <div className="brand"><i /> <span>DesktopLLM</span></div>
-      <nav className="app-nav" aria-label="Application views">
-        <button type="button" className={activeView === "chat" ? "active" : ""} onClick={() => setActiveView("chat")}>Chat</button>
-        <button type="button" className={activeView === "coding" ? "active" : ""} onClick={() => setActiveView("coding")}>Coding</button>
-      </nav>
       {activeView === "chat" && <>
       <button className="new-chat" onClick={newConversation}>＋ New chat</button>
       <p className="eyebrow">Conversations</p>
@@ -157,7 +153,12 @@ export default function App() {
       </>}
       <div className="sidebar-footer"><button className="settings-link" onClick={() => setSettingsOpen(true)}>Settings</button><button className="settings-link" onClick={() => setAboutOpen(true)}>About DesktopLLM</button></div>
     </aside>
-    {activeView === "chat" ? <section className="chat-pane">
+    <section className="main-view">
+      <nav className="view-tabs" aria-label="Application views">
+        <button type="button" className={activeView === "chat" ? "active" : ""} onClick={() => setActiveView("chat")}>Chat</button>
+        <button type="button" className={activeView === "coding" ? "active" : ""} onClick={() => setActiveView("coding")}>Coding</button>
+      </nav>
+      {activeView === "chat" ? <section className="chat-pane">
       <header><div><strong>{conversations.find((item) => item.id === activeId)?.title || "New conversation"}</strong><span>{provider === "ollama" ? "Local model" : "OpenRouter"}</span></div><div className="header-actions"><button className="model-status" onClick={() => setProvider(provider === "ollama" ? "openrouter" : "ollama")}>{provider === "ollama" ? "● Ollama" : "● OpenRouter"}</button><button className="inspector-toggle" aria-label={inspectorOpen ? "Hide conversation controls" : "Show conversation controls"} aria-pressed={inspectorOpen} onClick={() => setInspectorOpen((open) => !open)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16M16 3v4M9 10v4M18 17v4" /></svg></button></div></header>
       <div className="notice" role="status">{notice}</div>
       <div className="messages" ref={transcriptRef} onScroll={trackTranscriptScroll}>{activeMessages.length === 0 ? <div className="welcome"><h1>What would you like to work on?</h1><p>Select a work folder, then ask the assistant to read, edit, and run commands in that project. Your conversations remain on this device.</p></div> : activeMessages.map((message) => <article key={message.id} className={`message ${message.role}`}><span>{message.role === "user" ? "You" : "Assistant"}</span><div className="markdown">{message.content ? <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{message.content}</ReactMarkdown> : message.status === "streaming" ? "Thinking…" : ""}</div>{message.content && <div className="message-actions"><button onClick={() => void navigator.clipboard.writeText(message.content)}>Copy</button><button onClick={() => exportMessage(message, "text")}>Raw text</button><button onClick={() => exportMessage(message, "pdf")}>PDF</button></div>}</article>)}</div>
@@ -168,7 +169,17 @@ export default function App() {
           </button>
           {workFolder && <span className="work-folder-path" title={workFolder}>{workFolder}</span>}
         </div>{attachments.length > 0 && <div className="attachments" aria-label="Attached documents">{attachments.map((path) => <span className="attachment" key={path}>{path.split(/[\\/]/).pop()}<button type="button" aria-label={`Remove ${path.split(/[\\/]/).pop()}`} onClick={() => setAttachments((items) => items.filter((item) => item !== path))}>×</button></span>)}</div>}<textarea aria-label="Message composer" value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={sendOnEnter} placeholder="Message your model…" rows={3} /><div><span>{model || "Choose a model"}</span><div className="composer-actions"><button className="attach-button" type="button" aria-label="Attach documents" onClick={() => void window.desktopLLM.pickDocuments().then((files) => setAttachments((items) => [...new Set([...items, ...files])]))}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 12 6.5-6.5a3.5 3.5 0 1 1 5 5L10 20a5 5 0 0 1-7-7l9-9" /></svg></button><button type={streaming ? "button" : "submit"} onClick={() => streaming && window.desktopLLM.stopChat(activeId)} disabled={!streaming && (!prompt.trim() || !model)}>{streaming ? "Stop" : "Send ↑"}</button></div></div></form>
-    </section> : <CodingView workFolder={codingWorkFolder} onPickWorkFolder={pickCodingWorkFolder} onWorkFolderChange={setCodingFolder} />}
+    </section> : <CodingView
+      workFolder={codingWorkFolder}
+      onPickWorkFolder={pickCodingWorkFolder}
+      onWorkFolderChange={setCodingFolder}
+      provider={provider}
+      models={models}
+      model={model}
+      onProviderChange={setProvider}
+      onModelChange={setModel}
+    />}
+    </section>
     {activeView === "chat" && inspectorOpen && <aside className="inspector" aria-label="Model controls">
       <h2>Conversation</h2><label>Model source<select value={provider} onChange={(event) => setProvider(event.target.value as Provider)}><option value="ollama">Ollama (local)</option><option value="openrouter">OpenRouter</option></select></label>
       <label>Active model<select aria-label="Active model" value={model} onChange={(event) => setModel(event.target.value)}><option value="">Select a model</option>{models.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>

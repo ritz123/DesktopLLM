@@ -1,4 +1,8 @@
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import { ChatMessage, initialChatState, reduceChat } from "./lib/chat";
 
 type WorkspaceEntry = {
   name: string;
@@ -17,6 +21,11 @@ type Props = {
   workFolder: string | undefined;
   onPickWorkFolder: () => Promise<string | null>;
   onWorkFolderChange: (folder: string) => void;
+  provider: "ollama" | "openrouter";
+  models: { id: string; label: string }[];
+  model: string;
+  onProviderChange: (provider: "ollama" | "openrouter") => void;
+  onModelChange: (model: string) => void;
 };
 
 function flattenFiles(entries: WorkspaceEntry[]): WorkspaceEntry[] {
@@ -67,17 +76,29 @@ function TreeNode({
   );
 }
 
-export default function CodingView({ workFolder, onPickWorkFolder, onWorkFolderChange }: Props) {
+export default function CodingView({
+  workFolder,
+  onPickWorkFolder,
+  onWorkFolderChange,
+  provider,
+  models,
+  model,
+  onProviderChange,
+  onModelChange,
+}: Props) {
   const [tree, setTree] = useState<WorkspaceEntry[]>([]);
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activePath, setActivePath] = useState("");
   const [notice, setNotice] = useState("");
   const [loadingTree, setLoadingTree] = useState(false);
-  const [command, setCommand] = useState("");
-  const [terminal, setTerminal] = useState<string[]>([]);
-  const [runningCommand, setRunningCommand] = useState(false);
-  const commandIdRef = useRef("");
-  const terminalRef = useRef<HTMLPreElement>(null);
+  const [chatState, dispatchChat] = useReducer(reduceChat, initialChatState);
+  const [prompt, setPrompt] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const chatId = "coding-workspace";
+  const chatMessages = useMemo(
+    () => chatState.messages.filter((message) => message.conversationId === chatId),
+    [chatState.messages],
+  );
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.path === activePath),
@@ -102,29 +123,20 @@ export default function CodingView({ workFolder, onPickWorkFolder, onWorkFolderC
     void refreshTree(workFolder);
   }, [refreshTree, workFolder]);
 
-  useEffect(() => {
-    return window.desktopLLM.onWorkspaceChunk((chunk) => {
-      if (chunk.id !== commandIdRef.current) return;
-      if (chunk.type === "stdout" || chunk.type === "stderr") {
-        setTerminal((lines) => [...lines, chunk.data || ""]);
-      }
-      if (chunk.type === "done") {
-        setTerminal((lines) => [...lines, `\n[exit ${chunk.code ?? "?"}${chunk.timedOut ? ", timed out" : ""}]`]);
-        setRunningCommand(false);
-        commandIdRef.current = "";
-        if (workFolder) void refreshTree(workFolder);
-      }
-      if (chunk.type === "error") {
-        setTerminal((lines) => [...lines, `\n[error] ${chunk.error || "Command failed"}`]);
-        setRunningCommand(false);
-        commandIdRef.current = "";
-      }
-    });
-  }, [refreshTree, workFolder]);
-
-  useEffect(() => {
-    terminalRef.current?.scrollTo({ top: terminalRef.current.scrollHeight });
-  }, [terminal]);
+  useEffect(() => window.desktopLLM.onChunk((chunk) => {
+    if (chunk.id !== chatId) return;
+    if (chunk.type === "delta" && chunk.delta) {
+      dispatchChat({ type: "appendDelta", conversationId: chatId, delta: chunk.delta });
+    }
+    if (chunk.type === "done") {
+      dispatchChat({ type: "completeAssistant", conversationId: chatId });
+      setStreaming(false);
+    }
+    if (chunk.type === "error") {
+      setNotice(chunk.error || "The coding assistant response failed.");
+      setStreaming(false);
+    }
+  }), []);
 
   async function chooseFolder() {
     const picked = await onPickWorkFolder();
@@ -132,7 +144,6 @@ export default function CodingView({ workFolder, onPickWorkFolder, onWorkFolderC
     onWorkFolderChange(picked);
     setTabs([]);
     setActivePath("");
-    setTerminal([]);
   }
 
   async function openFile(path: string) {
@@ -177,22 +188,29 @@ export default function CodingView({ workFolder, onPickWorkFolder, onWorkFolderC
     }
   }
 
-  async function runTerminalCommand(event: FormEvent) {
+  async function sendChat(event: FormEvent) {
     event.preventDefault();
-    if (!workFolder || !command.trim() || runningCommand) return;
-    const id = crypto.randomUUID();
-    commandIdRef.current = id;
-    const line = `$ ${command.trim()}`;
-    setTerminal((lines) => [...lines, line]);
-    setRunningCommand(true);
-    setCommand("");
-    try {
-      await window.desktopLLM.workspaceRun({ id, root: workFolder, command: line.slice(2) });
-    } catch (error) {
-      setTerminal((lines) => [...lines, error instanceof Error ? error.message : "Command rejected."]);
-      setRunningCommand(false);
-      commandIdRef.current = "";
-    }
+    if (!workFolder || !prompt.trim() || !model || streaming) return;
+    const message: ChatMessage = {
+      id: crypto.randomUUID(),
+      conversationId: chatId,
+      role: "user",
+      content: prompt.trim(),
+      createdAt: new Date().toISOString(),
+      status: "complete",
+    };
+    dispatchChat({ type: "addMessage", message });
+    setPrompt("");
+    setStreaming(true);
+    await window.desktopLLM.sendChat({
+      id: chatId,
+      provider,
+      model,
+      messages: [...chatMessages, message].map(({ role, content }) => ({ role, content })),
+      systemPrompt: "You are a coding assistant. Help the user work safely in the selected coding workspace.",
+      temperature: 0.2,
+      workFolder,
+    });
   }
 
   function handleKeyDown(event: KeyboardEvent) {
@@ -284,25 +302,33 @@ export default function CodingView({ workFolder, onPickWorkFolder, onWorkFolderC
           ) : (
             <div className="editor-empty">Choose a file to start editing.</div>
           )}
-          <section className="terminal-panel" aria-label="Terminal">
-            <div className="terminal-header">
-              <span>Terminal</span>
-              {runningCommand && (
-                <button type="button" onClick={() => window.desktopLLM.workspaceStop(commandIdRef.current)}>
-                  Stop
-                </button>
-              )}
+          <section className="coding-assistant" aria-label="Coding assistant">
+            <div className="coding-assistant-header">
+              <span>Assistant</span>
+              <div>
+                <select aria-label="Coding assistant provider" value={provider} onChange={(event) => onProviderChange(event.target.value as "ollama" | "openrouter")}>
+                  <option value="ollama">Ollama</option>
+                  <option value="openrouter">OpenRouter</option>
+                </select>
+                <select aria-label="Coding assistant model" value={model} onChange={(event) => onModelChange(event.target.value)}>
+                  <option value="">Select a model</option>
+                  {models.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                </select>
+              </div>
             </div>
-            <pre className="terminal-output" ref={terminalRef}>{terminal.join("")}</pre>
-            <form className="terminal-form" onSubmit={runTerminalCommand}>
-              <input
-                aria-label="Terminal command"
-                value={command}
-                onChange={(event) => setCommand(event.target.value)}
-                placeholder="Run a command in the work folder…"
-                disabled={runningCommand}
-              />
-              <button type="submit" disabled={runningCommand || !command.trim()}>Run</button>
+            <div className="coding-messages">
+              {chatMessages.length === 0 ? <p>Ask about the project or an open file.</p> : chatMessages.map((message) => (
+                <article key={message.id} className={`coding-message ${message.role}`}>
+                  <span>{message.role === "user" ? "You" : "Assistant"}</span>
+                  <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{message.content || "Thinking…"}</ReactMarkdown></div>
+                </article>
+              ))}
+            </div>
+            <form className="coding-composer" onSubmit={sendChat}>
+              <textarea aria-label="Coding assistant message" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Ask the coding assistant…" rows={2} />
+              <button type={streaming ? "button" : "submit"} onClick={() => streaming && window.desktopLLM.stopChat(chatId)} disabled={!streaming && (!prompt.trim() || !model)}>
+                {streaming ? "Stop" : "Send ↑"}
+              </button>
             </form>
           </section>
         </section>

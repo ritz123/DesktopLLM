@@ -17,12 +17,14 @@ export interface ChatState {
 export type ChatAction =
   | { type: "appendDelta"; conversationId: string; delta: string }
   | { type: "completeAssistant"; conversationId: string }
+  | { type: "addMessage"; message: ChatMessage }
   | { type: "replace"; messages: ChatMessage[] };
 
 export const initialChatState: ChatState = { messages: [] };
 
 export function reduceChat(state: ChatState, action: ChatAction): ChatState {
   if (action.type === "replace") return { messages: action.messages };
+  if (action.type === "addMessage") return { messages: [...state.messages, action.message] };
   if (action.type === "appendDelta") {
     const last = state.messages.at(-1);
     if (last?.role === "assistant" && last.conversationId === action.conversationId) {
