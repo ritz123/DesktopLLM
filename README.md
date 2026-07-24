@@ -50,7 +50,19 @@ npm run package
 The output is written to:
 
 ```text
-dist/DesktopLLM-0.1.0.AppImage
+release/DesktopLLM-0.1.0.AppImage
+```
+
+## GitHub releases
+
+Pushing a version tag such as `v0.1.1` runs the release workflow. It tests the project, packages the Linux AppImage, and publishes it to the matching GitHub Release.
+
+```bash
+npm version 0.1.1 --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "chore: release v0.1.1"
+git tag v0.1.1
+git push origin main v0.1.1
 ```
 
 ## Development checks
