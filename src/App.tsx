@@ -241,7 +241,7 @@ export default function App() {
     <div className="titlebar"><span>DesktopLLM</span><div><button aria-label="Minimize window" onClick={() => void window.desktopLLM.minimizeWindow()}>—</button><button aria-label="Maximize window" onClick={() => void window.desktopLLM.toggleMaximizeWindow()}>□</button><button aria-label="Close window" onClick={() => void window.desktopLLM.closeWindow()}>×</button></div></div>
     <aside className="sidebar" aria-label="Navigation">
       <div className="pane-resizer pane-resizer-right" role="separator" aria-label="Resize conversation sidebar" aria-orientation="vertical" onPointerDown={(event) => beginHorizontalResize(event, "left", sidebarWidth, 180, 420, setSidebarWidth, sidebarWidthKey)} />
-      <div className="brand"><i /> <span>DesktopLLM</span></div>
+      <div className="brand"><img src="../build/icon.png" alt="" /> <span>DesktopLLM</span></div>
       {activeView === "chat" && <>
       <button className="new-chat" onClick={newConversation}>＋ New chat</button>
       <p className="eyebrow">Conversations</p>
