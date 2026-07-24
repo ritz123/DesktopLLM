@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-type ChatChunk = { id: string; type: "delta" | "done" | "error"; delta?: string; error?: string };
+type ChatChunk = { id: string; type: "delta" | "done" | "error" | "tool"; delta?: string; error?: string; name?: string; status?: "running" | "complete"; content?: string };
 type WorkspaceChunk = {
   id: string;
   type: "stdout" | "stderr" | "done" | "error";

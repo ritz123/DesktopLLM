@@ -31,7 +31,7 @@ interface Window {
     exportChat(args: unknown): Promise<void>;
     sendChat(args: unknown): Promise<void>;
     stopChat(id: string): Promise<void>;
-    onChunk(listener: (chunk: { id: string; type: "delta" | "done" | "error"; delta?: string; error?: string }) => void): () => void;
+    onChunk(listener: (chunk: { id: string; type: "delta" | "done" | "error" | "tool"; delta?: string; error?: string; name?: string; status?: "running" | "complete"; content?: string }) => void): () => void;
     workspaceList(root: string): Promise<WorkspaceEntry[]>;
     workspaceRead(root: string, relativePath: string): Promise<string>;
     workspaceWrite(root: string, relativePath: string, content: string): Promise<void>;

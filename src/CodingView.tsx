@@ -173,6 +173,7 @@ export default function CodingView({
     if (chunk.type === "delta" && chunk.delta) {
       dispatchChat({ type: "appendDelta", conversationId: chatId, delta: chunk.delta });
     }
+    if (chunk.type === "tool") setNotice(`${chunk.status === "running" ? "Running" : "Completed"} tool: ${chunk.name || "tool"}`);
     if (chunk.type === "done") {
       dispatchChat({ type: "completeAssistant", conversationId: chatId });
       setStreaming(false);

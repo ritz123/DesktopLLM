@@ -5,6 +5,7 @@ import { join, relative } from "node:path";
 import { executeTool, formatToolError, isAllowedCommand, normalizeToolCall, ToolCall, toolsForAgent } from "./tools.js";
 import { extractDocuments } from "./documents.js";
 import { isFreeOpenRouterModel, type OpenRouterModel } from "./models.js";
+import { normalizeOpenRouterToolCall, type OpenRouterToolCall } from "./openrouter.js";
 import {
   isIgnoredWorkspacePath,
   listWorkspaceTree,
@@ -153,6 +154,40 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
   event.sender.send("chat:chunk", { id, type: "done" });
 }
 
+async function runOpenRouterAgent(event: Electron.IpcMainInvokeEvent, id: string, settings: Settings, model: string, messages: unknown[], temperature: number, workFolder?: string) {
+  const tools = toolsForAgent(settings.webAccess ?? true);
+  for (let step = 0; step < 4; step++) {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      signal: controllers.get(id)?.signal,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.openRouterKey}` },
+      body: JSON.stringify({ model, messages, tools, temperature }),
+    });
+    if (!response.ok) throw new Error(providerError("openrouter", response.status));
+    const payload = await response.json() as { choices?: { message?: { content?: string; tool_calls?: OpenRouterToolCall[] } }[] };
+    const message = payload.choices?.[0]?.message;
+    if (!message) throw new Error("The model returned an empty response.");
+    const calls = message.tool_calls || [];
+    if (!calls.length) {
+      if (message.content) event.sender.send("chat:chunk", { id, type: "delta", delta: message.content });
+      event.sender.send("chat:chunk", { id, type: "done" });
+      return;
+    }
+    messages.push({ role: "assistant", content: message.content || null, tool_calls: calls });
+    for (const rawCall of calls) {
+      const { id: toolCallId, call } = normalizeOpenRouterToolCall(rawCall);
+      const normalized = normalizeToolCall(call);
+      event.sender.send("chat:chunk", { id, type: "tool", name: normalized.function.name, status: "running" });
+      let result: { name: string; content: string };
+      try { result = await executeTool(normalized, workFolder, settings.webAccess ?? true); }
+      catch (error) { result = { name: normalized.function.name, content: formatToolError(normalized.function.name, error) }; }
+      event.sender.send("chat:chunk", { id, type: "tool", name: result.name, status: "complete", content: result.content.slice(0, 300) });
+      messages.push({ role: "tool", tool_call_id: toolCallId, content: result.content });
+    }
+  }
+  throw new Error("The model exceeded the tool-call limit.");
+}
+
 async function listModels(provider: Provider) {
   const settings = await getSettings();
   try {
@@ -196,28 +231,7 @@ async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provid
       await runOllamaAgent(event, id, settings, model, enrichedMessages, systemPrompt, temperature, workFolder);
       return;
     }
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", signal: controller.signal, headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.openRouterKey}` }, body: JSON.stringify({ model, messages: allMessages, stream: true, temperature }) });
-    if (!response.ok || !response.body) throw new Error(providerError(provider, response.status));
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        const raw = provider === "openrouter" ? line.replace(/^data:\s*/, "") : line;
-        if (!raw || raw === "[DONE]") continue;
-        try {
-          const parsed = JSON.parse(raw);
-          const delta = parsed.choices?.[0]?.delta?.content;
-          if (delta) event.sender.send("chat:chunk", { id, type: "delta", delta });
-        } catch { /* wait for a complete line */ }
-      }
-    }
-    event.sender.send("chat:chunk", { id, type: "done" });
+    await runOpenRouterAgent(event, id, settings, model, allMessages, temperature, workFolder);
   } catch (error) {
     if (!controller.signal.aborted) event.sender.send("chat:chunk", { id, type: "error", error: error instanceof Error ? error.message : "Request failed" });
   } finally { controllers.delete(id); }

@@ -119,6 +119,7 @@ export default function App() {
     return window.desktopLLM.onChunk((chunk) => {
       if (chunk.id !== activeId) return;
       if (chunk.type === "delta" && chunk.delta) dispatch({ type: "appendDelta", conversationId: activeId, delta: chunk.delta });
+      if (chunk.type === "tool") setNotice(`${chunk.status === "running" ? "Running" : "Completed"} tool: ${chunk.name || "tool"}`);
       if (chunk.type === "done") { dispatch({ type: "completeAssistant", conversationId: activeId }); setStreaming(false); }
       if (chunk.type === "error") { dispatch({ type: "failAssistant", conversationId: activeId }); setNotice(chunk.error || "The response failed."); setStreaming(false); }
     });
