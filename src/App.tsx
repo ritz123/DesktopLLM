@@ -16,6 +16,7 @@ const storageKey = "desktopllm-conversations";
 const messageStorageKey = "desktopllm-messages";
 const sidebarWidthKey = "desktopllm-chat-sidebar-width";
 const inspectorWidthKey = "desktopllm-chat-inspector-width";
+const sidebarHiddenKey = "desktopllm-sidebar-hidden";
 const workspaceSetupSeenKey = "desktopllm-workspace-setup-seen";
 
 function loadConversations(): Conversation[] {
@@ -55,6 +56,7 @@ export default function App() {
   const [codingWorkFolder, setCodingWorkFolder] = useState<string | undefined>();
   const [attachments, setAttachments] = useState<string[]>([]);
   const [sidebarWidth, setSidebarWidth] = useState(() => loadPaneSize(sidebarWidthKey, 248, 180, 420));
+  const [sidebarHidden, setSidebarHidden] = useState(() => localStorage.getItem(sidebarHiddenKey) === "true");
   const [inspectorWidth, setInspectorWidth] = useState(() => loadPaneSize(inspectorWidthKey, 276, 220, 460));
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -237,7 +239,7 @@ export default function App() {
     "--inspector-width": `${inspectorWidth}px`,
   } as CSSProperties;
 
-  return <main className={`app-shell theme-${theme} ${inspectorOpen && activeView === "chat" ? "inspector-open" : ""} ${activeView === "coding" ? "coding-view" : ""}`} style={shellStyle}>
+  return <main className={`app-shell theme-${theme} ${sidebarHidden ? "sidebar-hidden" : ""} ${inspectorOpen && activeView === "chat" ? "inspector-open" : ""} ${activeView === "coding" ? "coding-view" : ""}`} style={shellStyle}>
     <div className="titlebar"><span>DesktopLLM</span><div><button aria-label="Minimize window" onClick={() => void window.desktopLLM.minimizeWindow()}>—</button><button aria-label="Maximize window" onClick={() => void window.desktopLLM.toggleMaximizeWindow()}>□</button><button aria-label="Close window" onClick={() => void window.desktopLLM.closeWindow()}>×</button></div></div>
     <aside className="sidebar" aria-label="Navigation">
       <div className="pane-resizer pane-resizer-right" role="separator" aria-label="Resize conversation sidebar" aria-orientation="vertical" onPointerDown={(event) => beginHorizontalResize(event, "left", sidebarWidth, 180, 420, setSidebarWidth, sidebarWidthKey)} />
@@ -254,6 +256,7 @@ export default function App() {
     </aside>
     <section className="main-view">
       <nav className="view-tabs" aria-label="Application views">
+        <button type="button" className="sidebar-toggle" aria-label={sidebarHidden ? "Show sidebar" : "Hide sidebar"} aria-pressed={!sidebarHidden} onClick={() => setSidebarHidden((hidden) => { localStorage.setItem(sidebarHiddenKey, String(!hidden)); return !hidden; })}>☰</button>
         <button type="button" className={activeView === "chat" ? "active" : ""} onClick={() => setActiveView("chat")}>Chat</button>
         <button type="button" className={activeView === "coding" ? "active" : ""} onClick={() => setActiveView("coding")}>Coding</button>
       </nav>
