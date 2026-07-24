@@ -15,6 +15,7 @@ interface Window {
       codingWorkFolder?: string;
       webAccess: boolean;
       theme: "dark" | "light";
+      hasOpenRouterKey: boolean;
     }>;
     saveSettings(settings: {
       ollamaUrl?: string;

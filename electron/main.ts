@@ -209,12 +209,16 @@ async function listModels(provider: Provider) {
     }
     if (!settings.openRouterKey) return [];
     const result = await fetch("https://openrouter.ai/api/v1/models", { headers: { Authorization: `Bearer ${settings.openRouterKey}` } });
-    if (!result.ok) throw new Error(String(result.status));
+    if (!result.ok) throw new Error(`HTTP ${result.status}`);
     const data = await result.json() as { data: OpenRouterModel[] };
     return data.data
       .filter(isFreeOpenRouterModel)
       .map(({ id, name }) => ({ provider, id, label: name || id }));
-  } catch { throw new Error(providerError(provider)); }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown network error";
+    const status = /^HTTP (\d+)$/.exec(detail)?.[1];
+    throw new Error(`${providerError(provider, status ? Number(status) : undefined)} Details: ${detail}.`);
+  }
 }
 
 async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provider: Provider, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number, attachments: string[] = [], workFolder?: string) {
@@ -250,7 +254,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  ipcMain.handle("settings:get", getSettings);
+  ipcMain.handle("settings:get", async () => {
+    const settings = await getSettings();
+    const { openRouterKey, ...safeSettings } = settings;
+    return { ...safeSettings, hasOpenRouterKey: Boolean(openRouterKey) };
+  });
   ipcMain.handle("settings:save", (_event, patch: Partial<Settings>) => saveSettings(patch));
   ipcMain.handle("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
   ipcMain.handle("window:toggle-maximize", (event) => {
