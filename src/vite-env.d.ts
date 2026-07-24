@@ -14,7 +14,7 @@ interface Window {
       workFolder?: string;
       codingWorkFolder?: string;
       webAccess: boolean;
-      theme: "dark" | "light" | "midnight" | "forest" | "dracula" | "solarized" | "nord" | "gruvbox";
+      theme: "dark" | "light" | "graphite" | "slate" | "paper";
       hasOpenRouterKey: boolean;
     }>;
     saveSettings(settings: {
@@ -23,7 +23,7 @@ interface Window {
       workFolder?: string;
       codingWorkFolder?: string;
       webAccess?: boolean;
-      theme?: "dark" | "light" | "midnight" | "forest" | "dracula" | "solarized" | "nord" | "gruvbox";
+      theme?: "dark" | "light" | "graphite" | "slate" | "paper";
     }): Promise<void>;
     minimizeWindow(): Promise<void>;
     toggleMaximizeWindow(): Promise<void>;

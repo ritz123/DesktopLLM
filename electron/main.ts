@@ -17,7 +17,7 @@ import {
 } from "./workspace.js";
 
 type Provider = "ollama" | "openrouter";
-type Theme = "dark" | "light" | "midnight" | "forest" | "dracula" | "solarized" | "nord" | "gruvbox";
+type Theme = "dark" | "light" | "graphite" | "slate" | "paper";
 type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 type Settings = {
   ollamaUrl: string;
@@ -42,7 +42,7 @@ async function getSettings(): Promise<Settings> {
       workFolder: stored.workFolder || stored.allowedFolders?.[0],
       codingWorkFolder: stored.codingWorkFolder,
       webAccess: stored.webAccess ?? true,
-      theme: ["light", "midnight", "forest", "dracula", "solarized", "nord", "gruvbox"].includes(stored.theme || "") ? stored.theme as Theme : "dark",
+      theme: ["light", "graphite", "slate", "paper"].includes(stored.theme || "") ? stored.theme as Theme : "dark",
       openRouterKey: stored.openRouterKey && safeStorage.isEncryptionAvailable()
         ? safeStorage.decryptString(Buffer.from(stored.openRouterKey, "base64")) : undefined,
     };
