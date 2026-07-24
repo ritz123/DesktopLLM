@@ -21,6 +21,7 @@ type EditorTab = {
 type Props = {
   workFolder: string | undefined;
   onPickWorkFolder: () => Promise<string | null>;
+  onInvalidWorkFolder: () => void;
   onWorkFolderChange: (folder: string) => void;
   provider: "ollama" | "openrouter";
   models: { id: string; label: string }[];
@@ -89,6 +90,7 @@ function TreeNode({
 export default function CodingView({
   workFolder,
   onPickWorkFolder,
+  onInvalidWorkFolder,
   onWorkFolderChange,
   provider,
   models,
@@ -144,7 +146,9 @@ export default function CodingView({
   useEffect(() => {
     if (!workFolder) return;
     void window.desktopLLM.workspaceWatch(workFolder).catch((error: Error) => {
-      setNotice(error.message || "Could not watch workspace files.");
+      onInvalidWorkFolder();
+      setNotice("The saved workspace folder no longer exists. Choose a replacement folder.");
+      void onPickWorkFolder();
     });
     return () => { void window.desktopLLM.workspaceUnwatch(); };
   }, [workFolder]);

@@ -102,6 +102,11 @@ export default function App() {
     void window.desktopLLM.saveSettings({ codingWorkFolder: folder });
   }
 
+  function clearCodingFolder() {
+    setCodingWorkFolder(undefined);
+    void window.desktopLLM.saveSettings({ codingWorkFolder: "" });
+  }
+
   async function ensureWorkFolder() {
     if (workFolder) return workFolder;
     return pickWorkFolder();
@@ -273,6 +278,7 @@ export default function App() {
     </section> : <CodingView
       workFolder={codingWorkFolder}
       onPickWorkFolder={pickCodingWorkFolder}
+      onInvalidWorkFolder={clearCodingFolder}
       onWorkFolderChange={setCodingFolder}
       provider={provider}
       models={models}
