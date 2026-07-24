@@ -58,6 +58,11 @@
       "category": "Utility",
       "synopsis": "Local-first Ollama and OpenRouter chat",
       "syncDesktopName": true
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
     }
   },
   "allowScripts": {

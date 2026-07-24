@@ -51,21 +51,29 @@ DesktopLLM starts with OpenRouter when a valid API key and a free tool-capable m
 
 The key is stored with Electron OS encryption and is never shown again in the Settings form. DesktopLLM lists only OpenRouter models with zero prompt/completion pricing that advertise tool support. Tool requests run automatically within the selected workspace and the configured web-access setting.
 
-## Package an AppImage
+## Package releases
 
+Linux AppImage:
 ```bash
 npm run package
 ```
 
-The output is written to:
+Windows NSIS installer:
+```powershell
+npm run build
+npx electron-builder --win
+```
+
+Outputs are written to:
 
 ```text
 release/DesktopLLM-0.1.0.AppImage
+release/DesktopLLM Setup 0.1.0.exe
 ```
 
 ## GitHub releases
 
-Pushing a version tag such as `v0.1.1` runs the release workflow. It tests the project, packages the Linux AppImage, and publishes it to the matching GitHub Release.
+Pushing a version tag such as `v0.1.1` runs the release workflow. It tests the project, packages Linux and Windows artifacts on their native GitHub runners, and publishes the AppImage and NSIS installer to the matching GitHub Release.
 
 ```bash
 npm version 0.1.1 --no-git-tag-version
