@@ -76,12 +76,10 @@ release/DesktopLLM Setup 0.1.0.exe
 Pushing a version tag such as `v0.1.1` runs the release workflow. It tests the project, packages Linux and Windows artifacts on their native GitHub runners, and publishes the AppImage and NSIS installer to the matching GitHub Release.
 
 ```bash
-npm version 0.1.1 --no-git-tag-version
-git add package.json package-lock.json
-git commit -m "chore: release v0.1.1"
-git tag v0.1.1
-git push origin main v0.1.1
+./releae.sh
 ```
+
+The script requires a clean, up-to-date `main` branch. It bumps the minor version, creates the release commit and tag, then pushes both to GitHub.
 
 ## Development checks
 
