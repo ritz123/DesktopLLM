@@ -35,7 +35,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npx electron-builder --win
+      - run: npx electron-builder --win --publish never
       - uses: actions/upload-artifact@v5
         with:
           name: windows-installer

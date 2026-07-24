@@ -13,7 +13,7 @@
     "test": "vitest",
     "build": "tsc -b && vite build",
     "electron": "electron .",
-    "package": "npm run build && electron-builder --linux"
+    "package": "npm run build && electron-builder --linux --publish never"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
