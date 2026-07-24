@@ -4,6 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { executeTool, formatToolError, isAllowedCommand, normalizeToolCall, ToolCall, toolsForAgent } from "./tools.js";
 import { extractDocuments } from "./documents.js";
+import { isFreeOpenRouterModel, type OpenRouterModel } from "./models.js";
 import {
   isIgnoredWorkspacePath,
   listWorkspaceTree,
@@ -174,8 +175,10 @@ async function listModels(provider: Provider) {
     if (!settings.openRouterKey) return [];
     const result = await fetch("https://openrouter.ai/api/v1/models", { headers: { Authorization: `Bearer ${settings.openRouterKey}` } });
     if (!result.ok) throw new Error(String(result.status));
-    const data = await result.json() as { data: { id: string; name?: string }[] };
-    return data.data.map(({ id, name }) => ({ provider, id, label: name || id }));
+    const data = await result.json() as { data: OpenRouterModel[] };
+    return data.data
+      .filter((model) => !isFreeOpenRouterModel(model))
+      .map(({ id, name }) => ({ provider, id, label: name || id }));
   } catch { throw new Error(providerError(provider)); }
 }
 
