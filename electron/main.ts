@@ -215,7 +215,9 @@ async function listModels(provider: Provider) {
       .filter(isFreeOpenRouterModel)
       .map(({ id, name }) => ({ provider, id, label: name || id }));
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "Unknown network error";
+    const cause = error instanceof Error && error.cause;
+    const causeDetail = cause instanceof Error ? cause.message : cause && typeof cause === "object" && "message" in cause ? String(cause.message) : "";
+    const detail = [error instanceof Error ? error.message : "Unknown network error", causeDetail].filter(Boolean).join(": ");
     const status = /^HTTP (\d+)$/.exec(detail)?.[1];
     throw new Error(`${providerError(provider, status ? Number(status) : undefined)} Details: ${detail}.`);
   }
