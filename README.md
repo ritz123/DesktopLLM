@@ -41,6 +41,16 @@ npm rebuild electron --foreground-scripts
 
 The launcher packages the app only when relevant source files are newer than the existing packaged executable, then starts the packaged Linux application.
 
+## OpenRouter setup
+
+DesktopLLM starts with OpenRouter when a valid API key and a free tool-capable model are available; otherwise it falls back to Ollama.
+
+1. Create an account at [OpenRouter](https://openrouter.ai/).
+2. Generate an API key from [OpenRouter Keys](https://openrouter.ai/keys).
+3. In DesktopLLM, open **Settings**, enter the key, and save.
+
+The key is stored with Electron OS encryption and is never shown again in the Settings form. DesktopLLM lists only OpenRouter models with zero prompt/completion pricing that advertise tool support. Tool requests run automatically within the selected workspace and the configured web-access setting.
+
 ## Package an AppImage
 
 ```bash
@@ -74,7 +84,7 @@ npm run build
 
 ## Agent tools
 
-Only Ollama models that advertise the native `tools` capability through `/api/show` are shown for agent use. Tool operations run in Electron's main process:
+Only Ollama models that advertise the native `tools` capability through `/api/show`, and free OpenRouter models that advertise `tools`, are shown for agent use. Tool operations run in Electron's main process:
 
 - `web_search` and `fetch_page` access public HTTP(S) endpoints.
 - `list_directory`, `read_file`, `write_file`, and `run_command` are restricted to the work folder selected in chat.
