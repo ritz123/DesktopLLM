@@ -231,7 +231,14 @@ async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provid
       await runOllamaAgent(event, id, settings, model, enrichedMessages, systemPrompt, temperature, workFolder);
       return;
     }
-    await runOpenRouterAgent(event, id, settings, model, allMessages, temperature, workFolder);
+    const toolPolicy = [
+      "You are an agent with access to native tools.",
+      workFolder ? `The user's work folder is ${workFolder}. Read, write, and run commands only inside that folder.` : "No work folder is selected yet; ask the user to choose one before using local file or command tools.",
+      "For current information, including news, immediately call web_search before answering. Do not claim you lack internet access when a web tool is available.",
+      "Use fetch_page after search when page details are needed.",
+      "Use local file tools only for the user's requested work and never claim a tool result you did not receive.",
+    ].join(" ");
+    await runOpenRouterAgent(event, id, settings, model, [{ role: "system", content: `${systemPrompt.trim()}\n\n${toolPolicy}`.trim() }, ...allMessages.filter((message) => message.role !== "system")], temperature, workFolder);
   } catch (error) {
     if (!controller.signal.aborted) event.sender.send("chat:chunk", { id, type: "error", error: error instanceof Error ? error.message : "Request failed" });
   } finally { controllers.delete(id); }
