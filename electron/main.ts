@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from "electron";
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -157,7 +157,7 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
 async function runOpenRouterAgent(event: Electron.IpcMainInvokeEvent, id: string, settings: Settings, model: string, messages: unknown[], temperature: number, workFolder?: string) {
   const tools = toolsForAgent(settings.webAccess ?? true);
   for (let step = 0; step < 4; step++) {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    const response = await net.fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       signal: controllers.get(id)?.signal,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.openRouterKey}` },
@@ -208,7 +208,7 @@ async function listModels(provider: Provider) {
       return checked.filter((model): model is { provider: "ollama"; id: string; label: string } => model !== null);
     }
     if (!settings.openRouterKey) return [];
-    const result = await fetch("https://openrouter.ai/api/v1/models", { headers: { Authorization: `Bearer ${settings.openRouterKey}` } });
+    const result = await net.fetch("https://openrouter.ai/api/v1/models", { headers: { Authorization: `Bearer ${settings.openRouterKey}` } });
     if (!result.ok) throw new Error(`HTTP ${result.status}`);
     const data = await result.json() as { data: OpenRouterModel[] };
     return data.data
