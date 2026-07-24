@@ -236,7 +236,9 @@ export default function CodingView({
 
   async function sendChat(event: FormEvent) {
     event.preventDefault();
-    if (!workFolder || !prompt.trim() || !model || streaming) return;
+    if (!prompt.trim() || !model || streaming) return;
+    const selectedWorkFolder = workFolder || await onPickWorkFolder();
+    if (!selectedWorkFolder) return;
     const message: ChatMessage = {
       id: crypto.randomUUID(),
       conversationId: chatId,
@@ -256,7 +258,7 @@ export default function CodingView({
       messages: [...chatMessages, message].map(({ role, content }) => ({ role, content })),
       systemPrompt: "You are a coding assistant. Help the user work safely in the selected coding workspace.",
       temperature: 0.2,
-      workFolder,
+      workFolder: selectedWorkFolder,
     });
   }
 
