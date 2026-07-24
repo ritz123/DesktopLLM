@@ -50,5 +50,5 @@ jobs:
           path: release
           merge-multiple: true
       - env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{secrets.GITHUB_TOKEN}}
         run: gh release create "${{ github.ref_name }}" release/*.AppImage release/*.exe --generate-notes
