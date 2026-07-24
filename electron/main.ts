@@ -177,7 +177,7 @@ async function listModels(provider: Provider) {
     if (!result.ok) throw new Error(String(result.status));
     const data = await result.json() as { data: OpenRouterModel[] };
     return data.data
-      .filter((model) => !isFreeOpenRouterModel(model))
+      .filter(isFreeOpenRouterModel)
       .map(({ id, name }) => ({ provider, id, label: name || id }));
   } catch { throw new Error(providerError(provider)); }
 }
