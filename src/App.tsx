@@ -5,6 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import CodingView from "./CodingView";
 import { ChatMessage, parseChatMessages, reduceChat } from "./lib/chat";
 import { clampPaneSize } from "./lib/panes";
+import { shouldFallbackToOllama } from "./lib/provider";
 
 type Provider = "ollama" | "openrouter";
 type Theme = "dark" | "light";
@@ -33,11 +34,11 @@ export default function App() {
     messages: parseChatMessages(localStorage.getItem(messageStorageKey)),
   });
   const [prompt, setPrompt] = useState("");
-  const [provider, setProvider] = useState<Provider>("ollama");
+  const [provider, setProvider] = useState<Provider>("openrouter");
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   const [streaming, setStreaming] = useState(false);
-  const [notice, setNotice] = useState("Connect to Ollama to begin.");
+  const [notice, setNotice] = useState("Connecting to OpenRouter…");
   const [systemPrompt, setSystemPrompt] = useState("You are a helpful assistant.");
   const [temperature, setTemperature] = useState(0.7);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -114,7 +115,21 @@ export default function App() {
   }, [activeId, latestMessage?.id, latestMessage?.content]);
   useEffect(() => {
     setModels([]); setModel("");
-    window.desktopLLM.listModels(provider).then((found) => { setModels(found); setModel(found[0]?.id || ""); setNotice(found.length ? `${found.length} ${provider} models available.` : provider === "openrouter" ? "Add an OpenRouter key in Settings." : "No Ollama models found."); }).catch((error: Error) => setNotice(error.message));
+    window.desktopLLM.listModels(provider).then((found) => {
+      if (shouldFallbackToOllama(provider, found.length)) {
+        setProvider("ollama");
+        return;
+      }
+      setModels(found);
+      setModel(found[0]?.id || "");
+      setNotice(`${found.length} ${provider} models available.`);
+    }).catch((error: Error) => {
+      if (provider === "openrouter") {
+        setProvider("ollama");
+        return;
+      }
+      setNotice(error.message);
+    });
   }, [provider]);
 
   function newConversation() {
