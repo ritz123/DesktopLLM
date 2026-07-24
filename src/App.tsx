@@ -5,7 +5,6 @@ import rehypeHighlight from "rehype-highlight";
 import CodingView from "./CodingView";
 import { ChatMessage, parseChatMessages, reduceChat } from "./lib/chat";
 import { clampPaneSize } from "./lib/panes";
-import { shouldFallbackToOllama } from "./lib/provider";
 import { needsWorkspaceSetup } from "./lib/workspaceSetup";
 
 type Provider = "ollama" | "openrouter";
@@ -39,7 +38,6 @@ export default function App() {
   const [provider, setProvider] = useState<Provider>("openrouter");
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
-  const [openRouterFallback, setOpenRouterFallback] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [notice, setNotice] = useState("Connecting to OpenRouter…");
   const [systemPrompt, setSystemPrompt] = useState("You are a helpful assistant.");
@@ -138,23 +136,14 @@ export default function App() {
   useEffect(() => {
     setModels([]); setModel("");
     window.desktopLLM.listModels(provider).then((found) => {
-      if (shouldFallbackToOllama(provider, found.length)) {
-        setOpenRouterFallback(true);
-        setProvider("ollama");
+      if (!found.length) {
+        setNotice("No free tool-capable OpenRouter models are available. Check your API key and account.");
         return;
       }
-      if (provider === "openrouter") setOpenRouterFallback(false);
       setModels(found);
       setModel(found[0]?.id || "");
-      setNotice(openRouterFallback && provider === "ollama" ? "OpenRouter needs a valid API key. Using Ollama." : `${found.length} ${provider} models available.`);
-    }).catch((error: Error) => {
-      if (provider === "openrouter") {
-        setOpenRouterFallback(true);
-        setProvider("ollama");
-        return;
-      }
-      setNotice(error.message);
-    });
+      setNotice(`${found.length} OpenRouter models available.`);
+    }).catch((error: Error) => setNotice(error.message));
   }, [provider]);
 
   function newConversation() {
