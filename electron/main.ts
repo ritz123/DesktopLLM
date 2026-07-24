@@ -245,13 +245,19 @@ async function streamChat(event: Electron.IpcMainInvokeEvent, id: string, provid
 }
 
 function createWindow() {
-  windowRef = new BrowserWindow({ width: 1320, height: 860, minWidth: 980, minHeight: 640, icon: join(app.getAppPath(), "build", "icon.png"), backgroundColor: "#1e1c19", webPreferences: { preload: join(import.meta.dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
+  windowRef = new BrowserWindow({ width: 1320, height: 860, minWidth: 980, minHeight: 640, frame: false, icon: join(app.getAppPath(), "build", "icon.png"), backgroundColor: "#1e1c19", webPreferences: { preload: join(import.meta.dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false } });
   windowRef.loadFile(join(app.getAppPath(), "dist", "index.html"));
 }
 
 app.whenReady().then(() => {
   ipcMain.handle("settings:get", getSettings);
   ipcMain.handle("settings:save", (_event, patch: Partial<Settings>) => saveSettings(patch));
+  ipcMain.handle("window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
+  ipcMain.handle("window:toggle-maximize", (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (window?.isMaximized()) window.unmaximize(); else window?.maximize();
+  });
+  ipcMain.handle("window:close", (event) => BrowserWindow.fromWebContents(event.sender)?.close());
   ipcMain.handle("openrouter:keys", () => shell.openExternal("https://openrouter.ai/keys"));
   ipcMain.handle("models:list", (_event, provider: Provider) => listModels(provider));
   ipcMain.handle("folders:pick", async () => {
