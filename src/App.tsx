@@ -31,7 +31,7 @@ function loadPaneSize(key: string, fallback: number, minimum: number, maximum: n
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>("chat");
   const [conversations, setConversations] = useState<Conversation[]>(loadConversations);
-  const [activeId, setActiveId] = useState<string>(() => loadConversations()[0]?.id || crypto.randomUUID());
+  const [activeId, setActiveId] = useState<string>(() => crypto.randomUUID());
   const [state, dispatch] = useReducer(reduceChat, {
     messages: parseChatMessages(localStorage.getItem(messageStorageKey)),
   });
