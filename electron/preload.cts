@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld("desktopLLM", {
     webAccess?: boolean;
     theme?: "dark" | "light";
   }) => ipcRenderer.invoke("settings:save", settings),
+  openOpenRouterKeys: () => ipcRenderer.invoke("openrouter:keys"),
   listModels: (provider: "ollama" | "openrouter") => ipcRenderer.invoke("models:list", provider),
   pickWorkFolder: () => ipcRenderer.invoke("folders:pick"),
   pickDocuments: () => ipcRenderer.invoke("documents:pick"),

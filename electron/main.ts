@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -231,6 +231,7 @@ function createWindow() {
 app.whenReady().then(() => {
   ipcMain.handle("settings:get", getSettings);
   ipcMain.handle("settings:save", (_event, patch: Partial<Settings>) => saveSettings(patch));
+  ipcMain.handle("openrouter:keys", () => shell.openExternal("https://openrouter.ai/keys"));
   ipcMain.handle("models:list", (_event, provider: Provider) => listModels(provider));
   ipcMain.handle("folders:pick", async () => {
     const result = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });

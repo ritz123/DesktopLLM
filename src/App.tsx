@@ -37,6 +37,7 @@ export default function App() {
   const [provider, setProvider] = useState<Provider>("openrouter");
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
+  const [openRouterFallback, setOpenRouterFallback] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [notice, setNotice] = useState("Connecting to OpenRouter…");
   const [systemPrompt, setSystemPrompt] = useState("You are a helpful assistant.");
@@ -117,14 +118,17 @@ export default function App() {
     setModels([]); setModel("");
     window.desktopLLM.listModels(provider).then((found) => {
       if (shouldFallbackToOllama(provider, found.length)) {
+        setOpenRouterFallback(true);
         setProvider("ollama");
         return;
       }
+      if (provider === "openrouter") setOpenRouterFallback(false);
       setModels(found);
       setModel(found[0]?.id || "");
-      setNotice(`${found.length} ${provider} models available.`);
+      setNotice(openRouterFallback && provider === "ollama" ? "OpenRouter needs a valid API key. Using Ollama." : `${found.length} ${provider} models available.`);
     }).catch((error: Error) => {
       if (provider === "openrouter") {
+        setOpenRouterFallback(true);
         setProvider("ollama");
         return;
       }
@@ -269,7 +273,7 @@ export default function App() {
       <label>Temperature <output>{temperature.toFixed(1)}</output><input aria-label="Temperature" type="range" min="0" max="1" step="0.1" value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} /></label>
       <div className="privacy"><b>Privacy</b><p>Messages are stored locally. No telemetry is sent.</p></div>
     </aside>}
-    {settingsOpen && <div className="modal-backdrop"><form className="settings-dialog" onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}><h2>Settings</h2><label>Theme<select value={theme} onChange={(event) => setTheme(event.target.value as Theme)}><option value="dark">Dark</option><option value="light">Light</option></select></label><label>Ollama URL<input value={ollamaUrl} onChange={(event) => setOllamaUrl(event.target.value)} /></label><label>OpenRouter API key<input type="password" value={openRouterKey} onChange={(event) => setOpenRouterKey(event.target.value)} placeholder="Stored with OS encryption" /></label><label><input type="checkbox" checked={webAccess} onChange={(event) => setWebAccess(event.target.checked)} /> Allow web tools</label><footer><button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button><button className="primary" type="submit">Save settings</button></footer></form></div>}
+    {settingsOpen && <div className="modal-backdrop"><form className="settings-dialog" onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}><h2>Settings</h2><label>Theme<select value={theme} onChange={(event) => setTheme(event.target.value as Theme)}><option value="dark">Dark</option><option value="light">Light</option></select></label><label>Ollama URL<input value={ollamaUrl} onChange={(event) => setOllamaUrl(event.target.value)} /></label><label>OpenRouter API key<input type="password" value={openRouterKey} onChange={(event) => setOpenRouterKey(event.target.value)} placeholder="Stored with OS encryption" /></label><p className="openrouter-setup">New to OpenRouter? Create an account and generate an API key.</p><button type="button" className="settings-link" onClick={() => void window.desktopLLM.openOpenRouterKeys()}>Open OpenRouter API keys</button><label><input type="checkbox" checked={webAccess} onChange={(event) => setWebAccess(event.target.checked)} /> Allow web tools</label><footer><button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button><button className="primary" type="submit">Save settings</button></footer></form></div>}
     {aboutOpen && <div className="modal-backdrop"><section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title"><img src="../build/icon.png" alt="" /><p className="eyebrow">DesktopLLM</p><h2 id="about-title">Local-first AI workspace</h2><p>Version 0.1.0</p><p>Chat with Ollama models on this device or OpenRouter models online. Conversations stay local; OpenRouter keys use OS encryption.</p><p>Select a work folder in chat so compatible Ollama models can read, write, and run commands there.</p><p className="license">Licensed under GNU GPL v3.0</p><p className="copyright">© 2026 Biplab Sarkar</p><footer><button className="primary" onClick={() => setAboutOpen(false)}>Close</button></footer></section></div>}
   </main>;
 }

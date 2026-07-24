@@ -24,6 +24,7 @@ interface Window {
       webAccess?: boolean;
       theme?: "dark" | "light";
     }): Promise<void>;
+    openOpenRouterKeys(): Promise<void>;
     listModels(provider: "ollama" | "openrouter"): Promise<{ provider: "ollama" | "openrouter"; id: string; label: string }[]>;
     pickWorkFolder(): Promise<string | null>;
     pickDocuments(): Promise<string[]>;
