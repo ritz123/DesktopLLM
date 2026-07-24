@@ -6,6 +6,7 @@ import CodingView from "./CodingView";
 import { ChatMessage, parseChatMessages, reduceChat } from "./lib/chat";
 import { clampPaneSize } from "./lib/panes";
 import { shouldFallbackToOllama } from "./lib/provider";
+import { needsWorkspaceSetup } from "./lib/workspaceSetup";
 
 type Provider = "ollama" | "openrouter";
 type Theme = "dark" | "light";
@@ -16,6 +17,7 @@ const storageKey = "desktopllm-conversations";
 const messageStorageKey = "desktopllm-messages";
 const sidebarWidthKey = "desktopllm-chat-sidebar-width";
 const inspectorWidthKey = "desktopllm-chat-inspector-width";
+const workspaceSetupSeenKey = "desktopllm-workspace-setup-seen";
 
 function loadConversations(): Conversation[] {
   try { return JSON.parse(localStorage.getItem(storageKey) || "[]"); } catch { return []; }
@@ -43,6 +45,7 @@ export default function App() {
   const [systemPrompt, setSystemPrompt] = useState("You are a helpful assistant.");
   const [temperature, setTemperature] = useState(0.7);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [workspaceSetupOpen, setWorkspaceSetupOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [ollamaUrl, setOllamaUrl] = useState("http://127.0.0.1:11434");
@@ -75,6 +78,17 @@ export default function App() {
     return picked;
   }
 
+  async function configureStartupWorkspace() {
+    const picked = await window.desktopLLM.pickWorkFolder();
+    if (picked) {
+      setDefaultWorkFolder(picked);
+      setCodingWorkFolder(picked);
+      await window.desktopLLM.saveSettings({ workFolder: picked, codingWorkFolder: picked });
+    }
+    localStorage.setItem(workspaceSetupSeenKey, "true");
+    setWorkspaceSetupOpen(false);
+  }
+
   async function pickCodingWorkFolder() {
     const picked = await window.desktopLLM.pickWorkFolder();
     if (!picked) return codingWorkFolder ?? null;
@@ -98,6 +112,7 @@ export default function App() {
       setOllamaUrl(settings.ollamaUrl);
       setDefaultWorkFolder(settings.workFolder);
       setCodingWorkFolder(settings.codingWorkFolder);
+      setWorkspaceSetupOpen(needsWorkspaceSetup(settings.workFolder, settings.codingWorkFolder) && !localStorage.getItem(workspaceSetupSeenKey));
       setWebAccess(settings.webAccess);
       setTheme(settings.theme);
     }).catch(() => setNotice("Desktop bridge unavailable. Launch via Electron."));
@@ -274,6 +289,7 @@ export default function App() {
       <div className="privacy"><b>Privacy</b><p>Messages are stored locally. No telemetry is sent.</p></div>
     </aside>}
     {settingsOpen && <div className="modal-backdrop"><form className="settings-dialog" onSubmit={(event) => { event.preventDefault(); void saveSettings(); }}><h2>Settings</h2><label>Theme<select value={theme} onChange={(event) => setTheme(event.target.value as Theme)}><option value="dark">Dark</option><option value="light">Light</option></select></label><label>Ollama URL<input value={ollamaUrl} onChange={(event) => setOllamaUrl(event.target.value)} /></label><label>OpenRouter API key<input type="password" value={openRouterKey} onChange={(event) => setOpenRouterKey(event.target.value)} placeholder="Stored with OS encryption" /></label><p className="openrouter-setup">New to OpenRouter? Create an account and generate an API key.</p><button type="button" className="settings-link" onClick={() => void window.desktopLLM.openOpenRouterKeys()}>Open OpenRouter API keys</button><label><input type="checkbox" checked={webAccess} onChange={(event) => setWebAccess(event.target.checked)} /> Allow web tools</label><footer><button type="button" onClick={() => setSettingsOpen(false)}>Cancel</button><button className="primary" type="submit">Save settings</button></footer></form></div>}
+    {workspaceSetupOpen && <div className="modal-backdrop"><section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-setup-title"><h2 id="workspace-setup-title">Choose a workspace folder</h2><p>Select a folder for the assistant to read and write files in. You can change it later.</p><footer><button type="button" onClick={() => { localStorage.setItem(workspaceSetupSeenKey, "true"); setWorkspaceSetupOpen(false); }}>Skip for now</button><button type="button" className="primary" onClick={() => void configureStartupWorkspace()}>Choose folder</button></footer></section></div>}
     {aboutOpen && <div className="modal-backdrop"><section className="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title"><img src="../build/icon.png" alt="" /><p className="eyebrow">DesktopLLM</p><h2 id="about-title">Local-first AI workspace</h2><p>Version 0.1.0</p><p>Chat with Ollama models on this device or OpenRouter models online. Conversations stay local; OpenRouter keys use OS encryption.</p><p>Select a work folder in chat so compatible Ollama models can read, write, and run commands there.</p><p className="license">Licensed under GNU GPL v3.0</p><p className="copyright">© 2026 Biplab Sarkar</p><footer><button className="primary" onClick={() => setAboutOpen(false)}>Close</button></footer></section></div>}
   </main>;
 }
