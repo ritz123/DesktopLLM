@@ -2,7 +2,8 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 
-export type ToolCall = { function: { name: string; arguments: Record<string, unknown> } };
+export type ToolCall = { function: { name: string; arguments: Record<string, unknown> | string } };
+export type NormalizedToolCall = { function: { name: string; arguments: Record<string, unknown> } };
 export type ToolResult = { name: string; content: string };
 
 export const agentTools = [
@@ -17,15 +18,72 @@ export const agentTools = [
 const COMMAND_TIMEOUT_MS = 60_000;
 const MAX_COMMAND_OUTPUT = 24_000;
 
-export function normalizeToolCall(call: ToolCall): ToolCall {
+const TOOL_NAME_ALIASES: Record<string, string> = {
+  web_fetch: "fetch_page",
+  web_browse: "fetch_page",
+  browse_page: "fetch_page",
+  search: "web_search",
+  websearch: "web_search",
+};
+
+function parseToolArguments(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== "string") return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch { /* keep string as single-value fallback below */ }
+  return {};
+}
+
+function parseOneToolPayload(raw: string): ToolCall | null {
+  try {
+    const obj = JSON.parse(raw.trim()) as Record<string, unknown>;
+    const nested = obj.function && typeof obj.function === "object" ? obj.function as Record<string, unknown> : null;
+    const name = String(obj.name || nested?.name || "").trim();
+    if (!name) return null;
+    const args = parseToolArguments(obj.arguments ?? obj.parameters ?? nested?.arguments ?? {});
+    return { function: { name, arguments: args } };
+  } catch {
+    return null;
+  }
+}
+
+/** Recover tool calls that weak models print as assistant text instead of native tool_calls. */
+export function parseToolCallsFromText(content: string): NormalizedToolCall[] {
+  const trimmed = content.trim();
+  if (!trimmed) return [];
+
+  const fromTags = [...trimmed.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi)]
+    .map((match) => parseOneToolPayload(match[1] || ""))
+    .filter((call): call is ToolCall => Boolean(call));
+  if (fromTags.length) return fromTags.map(normalizeToolCall);
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+  if (fenced) {
+    const call = parseOneToolPayload(fenced);
+    if (call) return [normalizeToolCall(call)];
+  }
+
+  if (trimmed.startsWith("{")) {
+    const call = parseOneToolPayload(trimmed);
+    if (call) return [normalizeToolCall(call)];
+  }
+
+  return [];
+}
+
+export function normalizeToolCall(call: ToolCall): NormalizedToolCall {
   const nameMatch = call.function.name.match(/^([a-z_]+)/i);
-  const name = nameMatch?.[1] || call.function.name;
+  const rawName = (nameMatch?.[1] || call.function.name).toLowerCase();
+  const name = TOOL_NAME_ALIASES[rawName] || rawName;
   const key = call.function.name.match(/<?arg_key>([^<]+)<\/arg_key>/i)?.[1];
   const value = call.function.name.match(/<?arg_value>([^<]+)<\/arg_value>/i)?.[1];
+  const arguments_ = parseToolArguments(call.function.arguments);
   return {
     function: {
       name,
-      arguments: key && value ? { ...call.function.arguments, [key]: value } : call.function.arguments,
+      arguments: key && value ? { ...arguments_, [key]: value } : arguments_,
     },
   };
 }
@@ -113,7 +171,7 @@ export function toolsForAgent(webAccess: boolean) {
 }
 
 export async function executeTool(call: ToolCall, workFolder: string | undefined, webAccess = true): Promise<ToolResult> {
-  const { name, arguments: args } = call.function;
+  const { name, arguments: args } = normalizeToolCall(call).function;
   if (name === "web_search" || name === "fetch_page") {
     if (!webAccess) throw new Error("Web tools are disabled in Settings.");
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractPublicUrl, formatToolError, isAllowedCommand, isSafePublicUrl, normalizeToolCall, sanitizeText } from "./tools.js";
+import { extractPublicUrl, formatToolError, isAllowedCommand, isSafePublicUrl, normalizeToolCall, parseToolCallsFromText, sanitizeText } from "./tools.js";
 
 describe("agent tool safeguards", () => {
   it("rejects privileged commands", () => {
@@ -40,5 +40,35 @@ describe("agent tool safeguards", () => {
   it("returns a recoverable tool failure for the agent", () => {
     expect(formatToolError("fetch_page", new Error("Page fetch was rejected.")))
       .toBe("fetch_page failed: Page fetch was rejected. Try another source or approach.");
+  });
+
+  it("aliases web_fetch to fetch_page", () => {
+    expect(normalizeToolCall({
+      function: { name: "web_fetch", arguments: { url: "https://www.ndtv.in/latest-news" } },
+    })).toEqual({
+      function: { name: "fetch_page", arguments: { url: "https://www.ndtv.in/latest-news" } },
+    });
+  });
+
+  it("parses JSON string arguments", () => {
+    expect(normalizeToolCall({
+      function: { name: "fetch_page", arguments: "{\"url\":\"https://example.com\"}" },
+    })).toEqual({
+      function: { name: "fetch_page", arguments: { url: "https://example.com" } },
+    });
+  });
+
+  it("recovers tool calls printed as assistant text by weak models", () => {
+    expect(parseToolCallsFromText(`
+<tool_call>
+{"name": "web_fetch", "arguments": {"url": "https://www.ndtv.in/latest-news"}}
+</tool_call>
+`)).toEqual([{
+      function: { name: "fetch_page", arguments: { url: "https://www.ndtv.in/latest-news" } },
+    }]);
+  });
+
+  it("ignores ordinary assistant prose without tool markup", () => {
+    expect(parseToolCallsFromText("Here is a summary of the news.")).toEqual([]);
   });
 });

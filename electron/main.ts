@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from "el
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { executeTool, formatToolError, isAllowedCommand, normalizeToolCall, ToolCall, toolsForAgent } from "./tools.js";
+import { executeTool, formatToolError, isAllowedCommand, normalizeToolCall, parseToolCallsFromText, ToolCall, toolsForAgent } from "./tools.js";
 import { extractDocuments } from "./documents.js";
 import { isFreeOpenRouterModel, type OpenRouterModel } from "./models.js";
 import { normalizeOpenRouterToolCall, type OpenRouterToolCall } from "./openrouter.js";
@@ -115,7 +115,9 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
       ? `The user's work folder is ${workFolder}. Read, write, and run commands only inside that folder.`
       : "No work folder is selected yet; ask the user to choose one before using local file or command tools.",
     "When a user needs current internet information, immediately call web_search with a useful query; do not ask for permission or merely describe the tool.",
-    "Use fetch_page only after search when page details are needed.",
+    "When the user provides a URL to read or summarize, call fetch_page with that URL.",
+    "Use fetch_page after search when page details are needed.",
+    "Never print tool calls as text or XML; use the native tool interface only.",
     "Use run_command for builds, tests, and other shell tasks. Commands run as the current user without sudo.",
     "Use local file tools only for the user's requested work. Never claim a tool result you did not receive.",
     "After a tool result, answer the user directly and cite relevant URLs or file paths.",
@@ -126,14 +128,18 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
     const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model, messages: history, stream: false, tools, options: { temperature } }) });
     if (!response.ok) throw new Error(providerError("ollama", response.status));
     const payload = await response.json() as { message: { content?: string; tool_calls?: ToolCall[] } };
-    const calls = payload.message.tool_calls || [];
+    const nativeCalls = payload.message.tool_calls || [];
+    const recoveredCalls = nativeCalls.length ? [] : parseToolCallsFromText(payload.message.content || "");
+    const calls = nativeCalls.length ? nativeCalls : recoveredCalls;
     if (!calls.length) {
       const content = payload.message.content?.trim() || await requestFinalOllamaAnswer(url, model, history, temperature);
       event.sender.send("chat:chunk", { id, type: "delta", delta: content });
       event.sender.send("chat:chunk", { id, type: "done" });
       return;
     }
-    history.push(payload.message);
+    history.push(nativeCalls.length
+      ? payload.message
+      : { role: "assistant", content: "", tool_calls: recoveredCalls });
     for (const call of calls) {
       const normalizedCall = normalizeToolCall(call);
       event.sender.send("chat:chunk", { id, type: "tool", name: normalizedCall.function.name, status: "running" });
