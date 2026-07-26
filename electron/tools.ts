@@ -36,6 +36,11 @@ function parseToolArguments(value: unknown): Record<string, unknown> {
   return {};
 }
 
+const KNOWN_TOOL_NAMES = new Set([
+  ...agentTools.map((tool) => tool.function.name),
+  ...Object.keys(TOOL_NAME_ALIASES),
+]);
+
 function parseOneToolPayload(raw: string): ToolCall | null {
   try {
     const obj = JSON.parse(raw.trim()) as Record<string, unknown>;
@@ -49,28 +54,146 @@ function parseOneToolPayload(raw: string): ToolCall | null {
   }
 }
 
+function extractBalancedJsonObjects(text: string): string[] {
+  const objects: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "{") continue;
+    const extracted = extractBalancedJsonAt(text, i);
+    if (!extracted) continue;
+    objects.push(extracted.json);
+    i = extracted.end - 1;
+  }
+  return objects;
+}
+
+function extractBalancedJsonAt(text: string, start: number): { json: string; end: number } | null {
+  if (text[start] !== "{") return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let j = start; j < text.length; j++) {
+    const ch = text[j];
+    if (inString) {
+      if (escape) escape = false;
+      else if (ch === "\\") escape = true;
+      else if (ch === "\"") inString = false;
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return { json: text.slice(start, j + 1), end: j + 1 };
+    }
+  }
+  return null;
+}
+
+function recoverToolCallsFromJsonBlobs(text: string): NormalizedToolCall[] {
+  return extractBalancedJsonObjects(text)
+    .map(parseOneToolPayload)
+    .filter((call): call is ToolCall => Boolean(call))
+    .map(normalizeToolCall)
+    .filter((call) => KNOWN_TOOL_NAMES.has(call.function.name) || Object.values(TOOL_NAME_ALIASES).includes(call.function.name));
+}
+
+/** Models like nanbeige print `web_search\\n{"query":...}fetch_page\\n{"url":...}` without a name field inside the JSON. */
+function recoverNamePrefixedToolCalls(text: string): NormalizedToolCall[] {
+  const names = [...KNOWN_TOOL_NAMES].sort((a, b) => b.length - a.length);
+  const nameRe = new RegExp(`\\b(${names.join("|")})\\b`, "gi");
+  const calls: ToolCall[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = nameRe.exec(text)) !== null) {
+    const name = match[1];
+    const afterName = text.slice(match.index + name.length);
+    const braceOffset = afterName.search(/\{/);
+    if (braceOffset < 0 || braceOffset > 120) continue;
+    const extracted = extractBalancedJsonAt(afterName, braceOffset);
+    if (!extracted) continue;
+    let args: Record<string, unknown>;
+    try {
+      args = parseToolArguments(JSON.parse(extracted.json));
+    } catch {
+      continue;
+    }
+    if (!Object.keys(args).length) continue;
+    calls.push({ function: { name, arguments: args } });
+    nameRe.lastIndex = match.index + name.length + extracted.end;
+  }
+  return calls.map(normalizeToolCall);
+}
+
+function contentLooksLikePrintedToolCall(text: string) {
+  return /<\/?tool_call\b/i.test(text) ||
+    /^tool_call\b/im.test(text) ||
+    text.trimStart().startsWith("{") ||
+    /```(?:json)?/i.test(text) ||
+    new RegExp(`(?:^|\\n)\\s*(?:${[...KNOWN_TOOL_NAMES].join("|")})\\b`, "i").test(text);
+}
+
+export { contentLooksLikePrintedToolCall };
+
+export function isWebDeflectionAnswer(text: string) {
+  const value = text.trim();
+  if (!value) return false;
+  return /please visit|visit (their|the|this)?\s*(website|site|page)|check (their|the) (website|site)|go to (their|the) (website|site)|for (the )?latest .+ visit/i.test(value)
+    || /technical limitations?|unable to (retrieve|fetch|access|get)|could not (retrieve|fetch|access)|cannot (retrieve|fetch|access)|wasn't able to (retrieve|fetch)|real-time headlines directly|based on .{0,80}(structure|typically covered)/i.test(value)
+    || (/apologize|oversight|unable to (browse|access|fetch)/i.test(value) && /https?:\/\//i.test(value) && value.length < 600)
+    || (/https?:\/\/[^\s)]+/i.test(value) && value.length < 280 && !/\b(headline|reported|according to)\b/i.test(value));
+}
+
+export function looksLikeCurrentInfoRequest(text: string) {
+  return /\b(latest|today|tonight|news|headline|headlines|breaking|current|update|updates|weather|stock|price|scores?)\b/i.test(text);
+}
+
+export function defaultWebLookupCalls(userText: string): NormalizedToolCall[] {
+  const query = userText.trim().slice(0, 400) || "latest news";
+  if (/\bndtv\b/i.test(query)) {
+    return [{ function: { name: "fetch_page", arguments: { url: "https://www.ndtv.com/latest" } } }];
+  }
+  return [{ function: { name: "web_search", arguments: { query } } }];
+}
+
+export function headlinesFromToolHistory(history: unknown[]) {
+  for (let index = history.length - 1; index >= 0; index--) {
+    const item = history[index] as { role?: string; tool_name?: string; content?: string };
+    if (item?.role !== "tool" || typeof item.content !== "string" || !item.content.trim()) continue;
+    if (/failed:/i.test(item.content)) continue;
+    if (/Concrete page headlines:/i.test(item.content) || item.tool_name === "fetch_page") {
+      return item.content.replace(/^fetch_page succeeded\.\s*/i, "").trim();
+    }
+    if (item.tool_name === "web_search") {
+      return `Search results:\n${item.content.slice(0, 4_000).trim()}`;
+    }
+  }
+  return null;
+}
+
 /** Recover tool calls that weak models print as assistant text instead of native tool_calls. */
 export function parseToolCallsFromText(content: string): NormalizedToolCall[] {
   const trimmed = content.trim();
   if (!trimmed) return [];
 
-  const fromTags = [...trimmed.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi)]
+  const fromTags = [...trimmed.matchAll(/<tool_call>\s*([\s\S]*?)\s*<\/\s*tool_call>/gi)]
     .map((match) => parseOneToolPayload(match[1] || ""))
     .filter((call): call is ToolCall => Boolean(call));
   if (fromTags.length) return fromTags.map(normalizeToolCall);
 
+  const prefixed = recoverNamePrefixedToolCalls(trimmed);
+  if (prefixed.length) return prefixed;
+
+  if (!contentLooksLikePrintedToolCall(trimmed)) return [];
+
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
   if (fenced) {
-    const call = parseOneToolPayload(fenced);
-    if (call) return [normalizeToolCall(call)];
+    const fromFence = recoverToolCallsFromJsonBlobs(fenced);
+    if (fromFence.length) return fromFence;
   }
 
-  if (trimmed.startsWith("{")) {
-    const call = parseOneToolPayload(trimmed);
-    if (call) return [normalizeToolCall(call)];
-  }
-
-  return [];
+  return recoverToolCallsFromJsonBlobs(trimmed);
 }
 
 export function normalizeToolCall(call: ToolCall): NormalizedToolCall {
@@ -114,7 +237,57 @@ export function isSafePublicUrl(value: string) {
 
 export function sanitizeText(html: string) {
   return html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim().slice(0, 24_000);
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\.[a-zA-Z_-][\w-]*(?:\s*,\s*\.[a-zA-Z_-][\w-]*)*\s*\{[^}]*\}/g, " ")
+    .replace(/[{}]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 24_000);
+}
+
+function cleanHeadlineText(value: string) {
+  return value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#039;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isUsefulHeadline(text: string) {
+  return text.length >= 28 &&
+    text.length <= 180 &&
+    !/[{};]|fill:|padding:|margin:|font-|\.mrth|advertisement|arrow-|facebook|whatsapp|vjl-|order-\d|flex-basis|max-width/i.test(text);
+}
+
+/** Prefer heading text so small models get usable headlines instead of a noisy HTML blob. */
+export function extractReadablePageText(html: string) {
+  const fromHeadings = [...html.matchAll(/<h[1-3][^>]*>([\s\S]*?)<\/h[1-3]>/gi)]
+    .map((match) => cleanHeadlineText(match[1]))
+    .filter(isUsefulHeadline);
+
+  // News body often starts late (after huge CSS/nav). Scan anchors from the latter half if needed.
+  const anchorSource = fromHeadings.length >= 5 ? "" : html.slice(Math.floor(html.length * 0.45));
+  const fromAnchors = anchorSource
+    ? [...anchorSource.matchAll(/<a[^>]*>([\s\S]*?)<\/a>/gi)]
+      .map((match) => cleanHeadlineText(match[1]))
+      .filter(isUsefulHeadline)
+    : [];
+
+  const headlines = [...fromHeadings, ...fromAnchors]
+    .filter((text, index, all) => all.indexOf(text) === index)
+    .slice(0, 30);
+
+  if (headlines.length >= 5) {
+    return `fetch_page succeeded. Concrete page headlines:\n${headlines.map((line) => `- ${line}`).join("\n")}`.slice(0, 12_000);
+  }
+
+  const bodyStart = html.search(/<h[1-3]\b/i);
+  const body = bodyStart >= 0 ? html.slice(bodyStart) : html.slice(Math.floor(html.length * 0.5));
+  return `fetch_page succeeded. Page text:\n${sanitizeText(body).slice(0, 8_000)}`;
 }
 
 function requireWorkFolder(workFolder?: string) {
@@ -179,14 +352,14 @@ export async function executeTool(call: ToolCall, workFolder: string | undefined
     const query = String(args.query || "").slice(0, 400);
     const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, { signal: AbortSignal.timeout(12_000) });
     if (!response.ok) throw new Error("Web search failed.");
-    return { name, content: sanitizeText(await response.text()).slice(0, 12_000) };
+    return { name, content: sanitizeText(await response.text()).slice(0, 4_000) };
   }
   if (name === "fetch_page") {
     const url = extractPublicUrl(String(args.url || ""));
     if (!isSafePublicUrl(url)) throw new Error("Only public HTTP(S) URLs are allowed.");
     const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(12_000), headers: { "User-Agent": "DesktopLLM/0.1" } });
     if (!response.ok || !isSafePublicUrl(response.url)) throw new Error("Page fetch was rejected.");
-    return { name, content: sanitizeText(await response.text()) };
+    return { name, content: extractReadablePageText(await response.text()) };
   }
   const folder = requireWorkFolder(workFolder);
   const path = String(args.path || "");

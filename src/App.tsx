@@ -170,6 +170,20 @@ export default function App() {
     setNotice("Conversation deleted.");
   }
 
+  function deleteAllConversations() {
+    if (!conversations.length) return;
+    if (!window.confirm(`Delete all ${conversations.length} conversations? This cannot be undone.`)) return;
+    if (streaming) {
+      window.desktopLLM.stopChat(activeId);
+      setStreaming(false);
+    }
+    const id = crypto.randomUUID();
+    setConversations([{ id, title: "New conversation", createdAt: new Date().toISOString(), workFolder: defaultWorkFolder }]);
+    setActiveId(id);
+    dispatch({ type: "replace", messages: [] });
+    setNotice("All conversations deleted.");
+  }
+
   async function send(event: FormEvent) {
     event.preventDefault();
     if (!prompt.trim() || !model || streaming) return;
@@ -246,13 +260,27 @@ export default function App() {
       <div className="brand"><img src="../build/icon.png" alt="" /> <span>DesktopLLM</span></div>
       {activeView === "chat" && <>
       <button className="new-chat" onClick={newConversation}>＋ New chat</button>
-      <p className="eyebrow">Conversations</p>
+      <div className="conversations-heading">
+        <p className="eyebrow">Conversations</p>
+        <button
+          type="button"
+          className="delete-all-conversations"
+          aria-label="Delete all conversations"
+          title="Delete all conversations"
+          disabled={!conversations.length}
+          onClick={deleteAllConversations}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M15 4V3H9v1H4v2h1v13c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V6h1V4h-5ZM9 17H7v-7h2v7Zm4 0h-2v-7h2v7Zm4 0h-2v-7h2v7Z" />
+          </svg>
+        </button>
+      </div>
       <nav className="conversation-list">{conversations.map((item) => <div className="conversation-row" key={item.id}>
         <button className="delete-conversation" aria-label={`Delete ${item.title}`} title="Delete conversation" onClick={() => deleteConversation(item.id)}>×</button>
         <button className={`conversation ${item.id === activeId ? "active" : ""}`} onClick={() => setActiveId(item.id)}>{item.title}</button>
       </div>)}</nav>
       </>}
-      <div className="sidebar-footer"><button className="settings-link" onClick={() => setSettingsOpen(true)}>Settings</button><button className="settings-link" onClick={() => setAboutOpen(true)}>About DesktopLLM</button></div>
+      <div className="sidebar-footer"><button className="settings-link" onClick={() => setSettingsOpen(true)}>Settings</button><button className="settings-link" onClick={() => setAboutOpen(true)}>About</button></div>
     </aside>
     <section className="main-view">
       <nav className="view-tabs" aria-label="Application views">

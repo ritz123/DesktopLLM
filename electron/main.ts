@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from "el
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { executeTool, formatToolError, isAllowedCommand, normalizeToolCall, parseToolCallsFromText, ToolCall, toolsForAgent } from "./tools.js";
+import { contentLooksLikePrintedToolCall, defaultWebLookupCalls, executeTool, formatToolError, headlinesFromToolHistory, isAllowedCommand, isWebDeflectionAnswer, looksLikeCurrentInfoRequest, normalizeToolCall, parseToolCallsFromText, ToolCall, toolsForAgent } from "./tools.js";
 import { extractDocuments } from "./documents.js";
 import { isFreeOpenRouterModel, type OpenRouterModel } from "./models.js";
 import { normalizeOpenRouterToolCall, type OpenRouterToolCall } from "./openrouter.js";
@@ -90,74 +90,209 @@ async function exportChat(format: "text" | "pdf", title: string, messages: ChatM
   printer.close();
 }
 
-async function requestFinalOllamaAnswer(url: string, model: string, history: unknown[], temperature: number) {
+async function requestFinalOllamaAnswer(url: string, model: string, history: unknown[], temperature: number, signal?: AbortSignal) {
   history.push({
     role: "system",
-    content: "Tool use is no longer available. Answer the user now using the attached document text and any tool results already provided. Do not request more tools.",
+    content: "Tool use is no longer available. Answer the user now using the attached document text and any tool results already provided. Do not print tool calls, XML, or JSON tool markup. Write a direct answer only.",
   });
   const response = await fetch(url, {
     method: "POST",
+    signal,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model, messages: history, stream: false, options: { temperature } }),
   });
   if (!response.ok) throw new Error(providerError("ollama", response.status));
   const payload = await response.json() as { message: { content?: string } };
   const content = payload.message.content?.trim();
-  if (!content) throw new Error("The model returned an empty response.");
-  return content;
+  if (content) return content;
+  return headlinesFromToolHistory(history) || "I could not generate a summary from the model. Please try again.";
+}
+
+function finishOllamaAnswer(event: Electron.IpcMainInvokeEvent, id: string, answer: string) {
+  event.sender.send("chat:chunk", { id, type: "delta", delta: answer });
+  event.sender.send("chat:chunk", { id, type: "done" });
+}
+
+function ollamaSignal(id: string, timeoutMs = 45_000) {
+  const signals = [AbortSignal.timeout(timeoutMs)];
+  const userSignal = controllers.get(id)?.signal;
+  if (userSignal) signals.push(userSignal);
+  return typeof AbortSignal.any === "function" ? AbortSignal.any(signals) : signals[0];
+}
+
+async function runOllamaToolBatch(
+  event: Electron.IpcMainInvokeEvent,
+  id: string,
+  calls: ToolCall[],
+  history: unknown[],
+  workFolder: string | undefined,
+  webAccess: boolean,
+  assistantMessage: unknown,
+) {
+  history.push(assistantMessage);
+  for (const call of calls) {
+    const normalizedCall = normalizeToolCall(call);
+    event.sender.send("chat:chunk", { id, type: "tool", name: normalizedCall.function.name, status: "running" });
+    let result: { name: string; content: string };
+    try {
+      result = await executeTool(normalizedCall, workFolder, webAccess);
+    } catch (error) {
+      result = {
+        name: normalizedCall.function.name,
+        content: formatToolError(normalizedCall.function.name, error),
+      };
+    }
+    event.sender.send("chat:chunk", { id, type: "tool", name: result.name, status: "complete", content: result.content.slice(0, 300) });
+    history.push({ role: "tool", tool_name: result.name, content: result.content });
+  }
+}
+
+async function summarizeAfterTools(
+  event: Electron.IpcMainInvokeEvent,
+  id: string,
+  url: string,
+  model: string,
+  history: unknown[],
+  temperature: number,
+) {
+  const fallback = headlinesFromToolHistory(history);
+  // Prefer the fetched headline list immediately when available; weak models often hang summarizing tool dumps.
+  if (fallback && /Concrete page headlines:/i.test(fallback)) {
+    finishOllamaAnswer(event, id, fallback);
+    return;
+  }
+  try {
+    const answer = await requestFinalOllamaAnswer(url, model, history, temperature, ollamaSignal(id, 45_000));
+    if (contentLooksLikePrintedToolCall(answer) || parseToolCallsFromText(answer).length || isWebDeflectionAnswer(answer)) {
+      finishOllamaAnswer(event, id, fallback || answer);
+      return;
+    }
+    finishOllamaAnswer(event, id, answer);
+  } catch {
+    finishOllamaAnswer(event, id, fallback || "The request timed out after fetching. Please try again.");
+  }
 }
 
 async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, settings: Settings, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number, workFolder?: string) {
   const url = `${settings.ollamaUrl.replace(/\/$/, "")}/api/chat`;
+  const webAccess = settings.webAccess ?? true;
+  const userText = [...messages].reverse().find((message) => message.role === "user")?.content || "";
   const toolPolicy = [
     "You are an agent with native tools.",
     workFolder
       ? `The user's work folder is ${workFolder}. Read, write, and run commands only inside that folder.`
       : "No work folder is selected yet; ask the user to choose one before using local file or command tools.",
-    "When a user needs current internet information, immediately call web_search with a useful query; do not ask for permission or merely describe the tool.",
+    "When a user needs current internet information or news, immediately call web_search with a useful query; do not ask for permission or merely describe the tool.",
+    "Never tell the user to visit a website instead of using tools. Fetch and summarize the information yourself.",
     "When the user provides a URL to read or summarize, call fetch_page with that URL.",
     "Use fetch_page after search when page details are needed.",
     "Never print tool calls as text or XML; use the native tool interface only.",
+    "After a tool result, answer with concrete facts from that result. Never invent placeholder headlines or summaries.",
+    "If a tool result says it succeeded or lists headlines, you already have real data. Never claim technical limitations or that you could not retrieve headlines.",
     "Use run_command for builds, tests, and other shell tasks. Commands run as the current user without sudo.",
     "Use local file tools only for the user's requested work. Never claim a tool result you did not receive.",
     "After a tool result, answer the user directly and cite relevant URLs or file paths.",
   ].join(" ");
   let history: unknown[] = [{ role: "system", content: `${systemPrompt.trim()}\n\n${toolPolicy}`.trim() }, ...messages];
-  const tools = toolsForAgent(settings.webAccess ?? true);
+  const tools = toolsForAgent(webAccess);
+  let usedWebTools = false;
+  let forcedWebLookup = false;
+
+  if (webAccess && looksLikeCurrentInfoRequest(userText)) {
+    forcedWebLookup = true;
+    usedWebTools = true;
+    const lookupCalls = defaultWebLookupCalls(userText);
+    await runOllamaToolBatch(event, id, lookupCalls, history, workFolder, webAccess, {
+      role: "assistant",
+      content: "",
+      tool_calls: lookupCalls.map((call) => ({
+        type: "function",
+        function: { name: call.function.name, arguments: call.function.arguments },
+      })),
+    });
+    await summarizeAfterTools(event, id, url, model, history, temperature);
+    return;
+  }
+
   for (let step = 0; step < 4; step++) {
-    const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model, messages: history, stream: false, tools, options: { temperature } }) });
+    const response = await fetch(url, {
+      method: "POST",
+      signal: ollamaSignal(id),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model, messages: history, stream: false, tools, options: { temperature } }),
+    });
     if (!response.ok) throw new Error(providerError("ollama", response.status));
     const payload = await response.json() as { message: { content?: string; tool_calls?: ToolCall[] } };
-    const nativeCalls = payload.message.tool_calls || [];
-    const recoveredCalls = nativeCalls.length ? [] : parseToolCallsFromText(payload.message.content || "");
+    const content = payload.message.content || "";
+    const nativeCalls = (payload.message.tool_calls || []).filter((call) => Boolean(call?.function?.name));
+    const recoveredCalls = parseToolCallsFromText(content);
     const calls = nativeCalls.length ? nativeCalls : recoveredCalls;
-    if (!calls.length) {
-      const content = payload.message.content?.trim() || await requestFinalOllamaAnswer(url, model, history, temperature);
-      event.sender.send("chat:chunk", { id, type: "delta", delta: content });
-      event.sender.send("chat:chunk", { id, type: "done" });
+    if (calls.length) {
+      const assistantMessage = nativeCalls.length
+        ? payload.message
+        : {
+          role: "assistant",
+          content: "",
+          tool_calls: recoveredCalls.map((call) => ({
+            type: "function",
+            function: { name: call.function.name, arguments: call.function.arguments },
+          })),
+        };
+      if (calls.some((call) => {
+        const name = normalizeToolCall(call).function.name;
+        return name === "web_search" || name === "fetch_page";
+      })) usedWebTools = true;
+      await runOllamaToolBatch(event, id, calls, history, workFolder, webAccess, assistantMessage);
+      if (usedWebTools && headlinesFromToolHistory(history)) {
+        await summarizeAfterTools(event, id, url, model, history, temperature);
+        return;
+      }
+      continue;
+    }
+    if (contentLooksLikePrintedToolCall(content)) {
+      history.push({ role: "assistant", content });
+      history.push({
+        role: "user",
+        content: usedWebTools
+          ? "Do not print tool calls. Summarize concrete headlines and details from the tool results already provided."
+          : "Do not print tool calls. Call web_search now for the user's request, then summarize the results.",
+      });
+      continue;
+    }
+    if (!content.trim()) break;
+    if (webAccess && !forcedWebLookup && !usedWebTools && isWebDeflectionAnswer(content)) {
+      forcedWebLookup = true;
+      usedWebTools = true;
+      const lookupCalls = defaultWebLookupCalls(userText);
+      await runOllamaToolBatch(event, id, lookupCalls, history, workFolder, webAccess, {
+        role: "assistant",
+        content: "",
+        tool_calls: lookupCalls.map((call) => ({
+          type: "function",
+          function: { name: call.function.name, arguments: call.function.arguments },
+        })),
+      });
+      await summarizeAfterTools(event, id, url, model, history, temperature);
       return;
     }
-    history.push(nativeCalls.length
-      ? payload.message
-      : { role: "assistant", content: "", tool_calls: recoveredCalls });
-    for (const call of calls) {
-      const normalizedCall = normalizeToolCall(call);
-      event.sender.send("chat:chunk", { id, type: "tool", name: normalizedCall.function.name, status: "running" });
-      let result: { name: string; content: string };
-      try {
-        result = await executeTool(normalizedCall, workFolder, settings.webAccess ?? true);
-      } catch (error) {
-        result = {
-          name: normalizedCall.function.name,
-          content: formatToolError(normalizedCall.function.name, error),
-        };
-      }
-      event.sender.send("chat:chunk", { id, type: "tool", name: result.name, status: "complete", content: result.content.slice(0, 300) });
-      history.push({ role: "tool", tool_name: result.name, content: result.content });
+    if (usedWebTools && isWebDeflectionAnswer(content)) {
+      finishOllamaAnswer(event, id, headlinesFromToolHistory(history) || content.trim());
+      return;
     }
+    finishOllamaAnswer(event, id, content.trim());
+    return;
   }
-  event.sender.send("chat:chunk", { id, type: "delta", delta: await requestFinalOllamaAnswer(url, model, history, temperature) });
-  event.sender.send("chat:chunk", { id, type: "done" });
+
+  const fallback = headlinesFromToolHistory(history);
+  try {
+    let answer = await requestFinalOllamaAnswer(url, model, history, temperature, ollamaSignal(id));
+    if (contentLooksLikePrintedToolCall(answer) || parseToolCallsFromText(answer).length || isWebDeflectionAnswer(answer)) {
+      answer = fallback || "I fetched the information but the model did not produce a usable summary. Try again or use a stronger model.";
+    }
+    finishOllamaAnswer(event, id, answer);
+  } catch {
+    finishOllamaAnswer(event, id, fallback || "The request timed out. Please try again.");
+  }
 }
 
 async function runOpenRouterAgent(event: Electron.IpcMainInvokeEvent, id: string, settings: Settings, model: string, messages: unknown[], temperature: number, workFolder?: string) {
