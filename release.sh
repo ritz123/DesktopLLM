@@ -8,7 +8,7 @@ if [[ "$(git branch --show-current)" != "main" ]]; then
   exit 1
 fi
 
-if [[ -n "$(git status --short)" ]]; then
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
   echo "Commit or stash changes before releasing."
   exit 1
 fi
