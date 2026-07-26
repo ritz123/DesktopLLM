@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultWebLookupCalls, extractPublicUrl, extractReadablePageText, formatToolError, headlinesFromToolHistory, isAllowedCommand, isSafePublicUrl, isWebDeflectionAnswer, looksLikeCurrentInfoRequest, normalizeToolCall, parseToolCallsFromText, sanitizeText } from "./tools.js";
+import { extractPublicUrl, extractReadablePageText, extractSearchResults, formatToolError, isAllowedCommand, isSafePublicUrl, isWebDeflectionAnswer, latestSuccessfulToolContent, normalizeToolCall, parseToolCallsFromText, sanitizeText } from "./tools.js";
 
 describe("agent tool safeguards", () => {
   it("rejects privileged commands", () => {
@@ -113,13 +113,6 @@ Headline 1 - Brief summary of the news item.
     expect(isWebDeflectionAnswer("Here are three concrete NDTV headlines about Bengaluru traffic and weather.")).toBe(false);
   });
 
-  it("detects current-info requests and builds a default NDTV lookup", () => {
-    expect(looksLikeCurrentInfoRequest("get me the latest news from ndtv")).toBe(true);
-    expect(defaultWebLookupCalls("get me the latest news from ndtv")).toEqual([
-      { function: { name: "fetch_page", arguments: { url: "https://www.ndtv.com/latest" } } },
-    ]);
-  });
-
   it("extracts concrete headlines from news page HTML", () => {
     const html = `
       <h2>PM Modi Announces Task Force On Exam Reforms Under Infosys Co-Founder</h2>
@@ -135,9 +128,30 @@ Headline 1 - Brief summary of the news item.
     expect(text).toContain("Tamil Nadu Supplementary Result 2026: Classes 10, 12 Marksheet Soon");
   });
 
-  it("recovers headlines from prior tool history when the model fails", () => {
-    expect(headlinesFromToolHistory([
-      { role: "tool", tool_name: "fetch_page", content: "fetch_page succeeded. Concrete page headlines:\n- One\n- Two" },
+  it("reads the latest successful tool content from history", () => {
+    expect(latestSuccessfulToolContent([
+      { role: "tool", content: "fetch_page succeeded. Concrete page headlines:\n- One\n- Two" },
     ])).toContain("- One");
+  });
+
+  it("extracts clean DuckDuckGo result rows", () => {
+    const html = `
+      <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.accuweather.com%2Fen%2Fin%2Fdelhi">Delhi Current Weather | AccuWeather</a>
+      <a class="result__snippet" href="#">Current weather in Delhi, India with radar and hourly forecasts.</a>
+      <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fmausam.imd.gov.in">IMD New Delhi</a>
+      <a class="result__snippet" href="#">Official weather observations from India Meteorological Department.</a>
+    `;
+    const text = extractSearchResults(html);
+    expect(text).toContain("web_search succeeded. Search results:");
+    expect(text).toContain("Delhi Current Weather | AccuWeather");
+    expect(text).toContain("https://www.accuweather.com/en/in/delhi");
+    expect(text).not.toContain("All Regions");
+  });
+
+  it("passes JSON page bodies through without domain-specific formatting", () => {
+    const payload = { current_condition: [{ temp_C: "34" }] };
+    const text = extractReadablePageText(JSON.stringify(payload));
+    expect(text).toContain("JSON response:");
+    expect(text).toContain('"temp_C":"34"');
   });
 });

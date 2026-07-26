@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell } from "el
 import { watch, type FSWatcher } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { contentLooksLikePrintedToolCall, defaultWebLookupCalls, executeTool, formatToolError, headlinesFromToolHistory, isAllowedCommand, isWebDeflectionAnswer, looksLikeCurrentInfoRequest, normalizeToolCall, parseToolCallsFromText, ToolCall, toolsForAgent } from "./tools.js";
+import { contentLooksLikePrintedToolCall, executeTool, formatToolError, isAllowedCommand, isWebDeflectionAnswer, latestSuccessfulToolContent, normalizeToolCall, parseToolCallsFromText, ToolCall, toolsForAgent } from "./tools.js";
 import { extractDocuments } from "./documents.js";
 import { isFreeOpenRouterModel, type OpenRouterModel } from "./models.js";
 import { normalizeOpenRouterToolCall, type OpenRouterToolCall } from "./openrouter.js";
@@ -105,7 +105,7 @@ async function requestFinalOllamaAnswer(url: string, model: string, history: unk
   const payload = await response.json() as { message: { content?: string } };
   const content = payload.message.content?.trim();
   if (content) return content;
-  return headlinesFromToolHistory(history) || "I could not generate a summary from the model. Please try again.";
+  return "";
 }
 
 function finishOllamaAnswer(event: Electron.IpcMainInvokeEvent, id: string, answer: string) {
@@ -147,6 +147,9 @@ async function runOllamaToolBatch(
   }
 }
 
+const WEAK_MODEL_AFTER_TOOLS =
+  "Tools ran, but this model did not produce a usable answer from the results. Try a stronger tool-capable model.";
+
 async function summarizeAfterTools(
   event: Electron.IpcMainInvokeEvent,
   id: string,
@@ -155,28 +158,21 @@ async function summarizeAfterTools(
   history: unknown[],
   temperature: number,
 ) {
-  const fallback = headlinesFromToolHistory(history);
-  // Prefer the fetched headline list immediately when available; weak models often hang summarizing tool dumps.
-  if (fallback && /Concrete page headlines:/i.test(fallback)) {
-    finishOllamaAnswer(event, id, fallback);
-    return;
-  }
   try {
     const answer = await requestFinalOllamaAnswer(url, model, history, temperature, ollamaSignal(id, 45_000));
-    if (contentLooksLikePrintedToolCall(answer) || parseToolCallsFromText(answer).length || isWebDeflectionAnswer(answer)) {
-      finishOllamaAnswer(event, id, fallback || answer);
+    if (contentLooksLikePrintedToolCall(answer) || parseToolCallsFromText(answer).length || isWebDeflectionAnswer(answer) || !answer.trim()) {
+      finishOllamaAnswer(event, id, WEAK_MODEL_AFTER_TOOLS);
       return;
     }
     finishOllamaAnswer(event, id, answer);
   } catch {
-    finishOllamaAnswer(event, id, fallback || "The request timed out after fetching. Please try again.");
+    finishOllamaAnswer(event, id, "The request timed out after fetching. Please try again.");
   }
 }
 
 async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, settings: Settings, model: string, messages: ChatMessage[], systemPrompt: string, temperature: number, workFolder?: string) {
   const url = `${settings.ollamaUrl.replace(/\/$/, "")}/api/chat`;
   const webAccess = settings.webAccess ?? true;
-  const userText = [...messages].reverse().find((message) => message.role === "user")?.content || "";
   const toolPolicy = [
     "You are an agent with native tools.",
     workFolder
@@ -196,23 +192,6 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
   let history: unknown[] = [{ role: "system", content: `${systemPrompt.trim()}\n\n${toolPolicy}`.trim() }, ...messages];
   const tools = toolsForAgent(webAccess);
   let usedWebTools = false;
-  let forcedWebLookup = false;
-
-  if (webAccess && looksLikeCurrentInfoRequest(userText)) {
-    forcedWebLookup = true;
-    usedWebTools = true;
-    const lookupCalls = defaultWebLookupCalls(userText);
-    await runOllamaToolBatch(event, id, lookupCalls, history, workFolder, webAccess, {
-      role: "assistant",
-      content: "",
-      tool_calls: lookupCalls.map((call) => ({
-        type: "function",
-        function: { name: call.function.name, arguments: call.function.arguments },
-      })),
-    });
-    await summarizeAfterTools(event, id, url, model, history, temperature);
-    return;
-  }
 
   for (let step = 0; step < 4; step++) {
     const response = await fetch(url, {
@@ -243,7 +222,7 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
         return name === "web_search" || name === "fetch_page";
       })) usedWebTools = true;
       await runOllamaToolBatch(event, id, calls, history, workFolder, webAccess, assistantMessage);
-      if (usedWebTools && headlinesFromToolHistory(history)) {
+      if (usedWebTools && latestSuccessfulToolContent(history)) {
         await summarizeAfterTools(event, id, url, model, history, temperature);
         return;
       }
@@ -254,44 +233,38 @@ async function runOllamaAgent(event: Electron.IpcMainInvokeEvent, id: string, se
       history.push({
         role: "user",
         content: usedWebTools
-          ? "Do not print tool calls. Summarize concrete headlines and details from the tool results already provided."
-          : "Do not print tool calls. Call web_search now for the user's request, then summarize the results.",
+          ? "Do not print tool calls. Answer from the tool results already provided."
+          : "Do not print tool calls. Use the native tool interface for the user's request, then answer.",
       });
       continue;
     }
     if (!content.trim()) break;
-    if (webAccess && !forcedWebLookup && !usedWebTools && isWebDeflectionAnswer(content)) {
-      forcedWebLookup = true;
-      usedWebTools = true;
-      const lookupCalls = defaultWebLookupCalls(userText);
-      await runOllamaToolBatch(event, id, lookupCalls, history, workFolder, webAccess, {
-        role: "assistant",
-        content: "",
-        tool_calls: lookupCalls.map((call) => ({
-          type: "function",
-          function: { name: call.function.name, arguments: call.function.arguments },
-        })),
-      });
-      await summarizeAfterTools(event, id, url, model, history, temperature);
+    if (webAccess && !usedWebTools && isWebDeflectionAnswer(content)) {
+      finishOllamaAnswer(
+        event,
+        id,
+        "This model refused to use tools and did not fetch anything. Try a stronger tool-capable model.",
+      );
       return;
     }
     if (usedWebTools && isWebDeflectionAnswer(content)) {
-      finishOllamaAnswer(event, id, headlinesFromToolHistory(history) || content.trim());
+      finishOllamaAnswer(event, id, WEAK_MODEL_AFTER_TOOLS);
       return;
     }
     finishOllamaAnswer(event, id, content.trim());
     return;
   }
 
-  const fallback = headlinesFromToolHistory(history);
   try {
     let answer = await requestFinalOllamaAnswer(url, model, history, temperature, ollamaSignal(id));
-    if (contentLooksLikePrintedToolCall(answer) || parseToolCallsFromText(answer).length || isWebDeflectionAnswer(answer)) {
-      answer = fallback || "I fetched the information but the model did not produce a usable summary. Try again or use a stronger model.";
+    if (contentLooksLikePrintedToolCall(answer) || parseToolCallsFromText(answer).length || isWebDeflectionAnswer(answer) || !answer.trim()) {
+      answer = usedWebTools
+        ? WEAK_MODEL_AFTER_TOOLS
+        : "This model did not produce a usable answer. Try a stronger tool-capable model.";
     }
     finishOllamaAnswer(event, id, answer);
   } catch {
-    finishOllamaAnswer(event, id, fallback || "The request timed out. Please try again.");
+    finishOllamaAnswer(event, id, "The request timed out. Please try again.");
   }
 }
 
